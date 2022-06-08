@@ -16,8 +16,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG TF_Version="1.1.5"
 ARG GO_VERSION="1.16.7"
 ARG HELM_VERSION=3.6.3
-ARG OC_VERSION="v3.11.0" 
-ARG OC_RELEASE="openshift-origin-client-tools-v3.11.0-0cbc58b-linux-64bit"
+ARG OC_VERSION="4.10.17" 
+ARG KUBECTX_VERSION "0.9.4"
 
 # Configure apt and install packages
 RUN apt-get update \
@@ -42,10 +42,9 @@ RUN mkdir -p /tmp/downloads/helm \
     && mv /tmp/downloads/helm/linux-amd64/helm /usr/local/bin
 
 # Install kubectx
-ENV VERSION "0.9.4"
 RUN echo "Installing kubectx" \
-    && curl -L -o /usr/local/bin/kubectx https://raw.githubusercontent.com/ahmetb/kubectx/v${VERSION}/kubectx \
-	&& curl -L -o /usr/local/bin/kubens https://raw.githubusercontent.com/ahmetb/kubectx/v${VERSION}/kubens \
+    && curl -L -o /usr/local/bin/kubectx https://raw.githubusercontent.com/ahmetb/kubectx/v${KUBECTX_VERSION}/kubectx \
+	&& curl -L -o /usr/local/bin/kubens https://raw.githubusercontent.com/ahmetb/kubectx/v${KUBECTX_VERSION}/kubens \
     && chmod +x /usr/local/bin/kubectx \
     && chmod +x /usr/local/bin/kubens
 
@@ -86,12 +85,19 @@ RUN wget https://github.com/mikefarah/yq/releases/download/${VERSION}/${BINARY} 
     && chmod +x /usr/bin/yq
 
 # Install OpenShift CLI
-ADD https://github.com/openshift/origin/releases/download/${OC_VERSION}/${OC_RELEASE}.tar.gz /opt/oc/release.tar.gz
 RUN apt-get install ca-certificates -y
-RUN tar --strip-components=1 -xzvf  /opt/oc/release.tar.gz -C /opt/oc/ && \
-    mv /opt/oc/oc /usr/bin/ && \
+RUN wget https://rakirahman.blob.core.windows.net/public/binaries/oc-${OC_VERSION}-linux.tar.gz && \
+    mkdir -p /opt/oc && \
+    mv oc-${OC_VERSION}-linux.tar.gz /opt/oc/release.tar.gz && \
+    tar xvzf /opt/oc/release.tar.gz -C /opt/oc && \
+    mv /opt/oc/oc /usr/local/bin/ && \
+    mv /opt/oc/kubectl /usr/local/bin/ && \
     rm -rf /opt/oc && \
-    oc version
+    chmod +x /usr/local/bin/oc && \
+    chmod +x /usr/local/bin/kubectl
+
+# Install VMWare govc
+RUN curl -L -o - "https://github.com/vmware/govmomi/releases/latest/download/govc_$(uname -s)_$(uname -m).tar.gz" | tar -C /usr/local/bin -xvzf - govc
 
 # Clean up
 RUN apt-get autoremove -y \
