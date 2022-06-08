@@ -35,13 +35,6 @@ RUN apt-get install -y apt-transport-https gnupg2 lsb-release \
 # Add Azure CLI extensions
 RUN az config set extension.use_dynamic_install=yes_without_prompt
 
-# Install OpenShift CLI
-ADD https://github.com/openshift/origin/releases/download/${OC_VERSION}/${OC_RELEASE}.tar.gz /opt/oc/release.tar.gz
-RUN apk add --no-cache ca-certificates
-RUN tar --strip-components=1 -xzvf  /opt/oc/release.tar.gz -C /opt/oc/ && \
-    mv /opt/oc/oc /usr/bin/ && \
-    rm -rf /opt/oc
-
 # Install Helm
 RUN mkdir -p /tmp/downloads/helm \
     && curl -sL -o /tmp/downloads/helm.tar.gz https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz \
@@ -91,6 +84,14 @@ ARG VERSION=v4.25.1
 ARG BINARY=yq_linux_386
 RUN wget https://github.com/mikefarah/yq/releases/download/${VERSION}/${BINARY} -O /usr/bin/yq \ 
     && chmod +x /usr/bin/yq
+
+# Install OpenShift CLI
+ADD https://github.com/openshift/origin/releases/download/${OC_VERSION}/${OC_RELEASE}.tar.gz /opt/oc/release.tar.gz
+RUN apt-get install ca-certificates -y
+RUN tar --strip-components=1 -xzvf  /opt/oc/release.tar.gz -C /opt/oc/ && \
+    mv /opt/oc/oc /usr/bin/ && \
+    rm -rf /opt/oc && \
+    oc version
 
 # Clean up
 RUN apt-get autoremove -y \
