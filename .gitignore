@@ -30,3 +30,6 @@ override.tf.json
 
 # Devcontainer stuff
 .devcontainer/devcontainer.env
+
+# Secret stuff
+openshift-install/secrets/

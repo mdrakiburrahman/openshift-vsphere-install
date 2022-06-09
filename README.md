@@ -249,7 +249,37 @@ Everything is up!
 
 ---
 
-# OpenShift `IPI`-based install
+# OpenShift `IPI`-based install - Cluster Name: `arcci`
 
 > `IPI` because we want horizontal scalability on our `MachineSets`
 
+## Add a Reverse Lookup Zone
+```powershell
+# Add a reverse lookup zone - VLAN 111
+Add-DnsServerPrimaryZone -NetworkId "10.216.175.0/24" -ReplicationScope Domain
+
+# Get reverse zone name
+$Zones = @(Get-DnsServerZone)
+ForEach ($Zone in $Zones) {
+    if ((-not $($Zone.IsAutoCreated)) -and ($Zone.IsReverseLookupZone) -and ($Zone.ZoneName.Split(".")[0] -eq "0")) {
+       $Reverse = $Zone.ZoneName
+    }
+}
+```
+
+## DNS records for OpenShift - [from here](https://github.com/openshift/installer/blob/master/docs/user/vsphere/vips-dns.md#dns-records)
+
+```PowerShell
+$clusterName = 'arcci'
+$baseDomain = 'fg.contoso.com'
+$ip1 = '10.216.175.6'
+$ip2 = '10.216.175.7'
+
+Add-DnsServerResourceRecordA -Name "api.$clusterName" -ZoneName $baseDomain -AllowUpdateAny -IPv4Address $ip1 -TimeToLive 01:00:00 -createptr
+Add-DnsServerResourceRecordA -Name "*.apps.$clusterName" -ZoneName $baseDomain -AllowUpdateAny -IPv4Address $ip2 -TimeToLive 01:00:00 -createptr
+```
+
+We see:
+![Result](_images/10.png)
+
+## Generate SSH Key pair for Nodes
