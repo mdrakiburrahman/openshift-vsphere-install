@@ -413,9 +413,28 @@ openshift-install create cluster --log-level=debug
 # INFO API v1.23.5+3afdacb up                       
 # INFO Waiting up to 30m0s (until 4:28AM) for bootstrapping to complete... 
 #...
-
+# INFO Waiting up to 10m0s (until 9:13PM) for the openshift-console route to be created... 
+# DEBUG Route found in openshift-console namespace: console 
+# DEBUG OpenShift console route is admitted          
+# INFO Install complete!                            
+# INFO To access the cluster as the system:admin user when using 'oc', run 'export KUBECONFIG=/workspaces/openshift-vsphere-install/openshift-install/secrets/installation-assets/auth/kubeconfig' 
+# INFO Access the OpenShift web-console here: https://console-openshift-console.apps.arcci.fg.contoso.com 
+# INFO Login to the console with user: "kubeadmin", and password: "..." 
+# DEBUG Time elapsed per stage:                      
+# DEBUG      pre-bootstrap: 1m18s                    
+# DEBUG          bootstrap: 37s                      
+# DEBUG             master: 53s                      
+# DEBUG Bootstrap Complete: 9m58s                    
+# DEBUG                API: 57s                      
+# DEBUG  Bootstrap Destroy: 24s                      
+# DEBUG  Cluster Operators: 14m22s                   
+# INFO Time elapsed: 29m15s  
 # 
 ```
+
+Complete:
+
+![Result](_images/11.png)
 
 ## Access `oc` and vSphere from `OCPLab-DEV-1`
 
@@ -446,3 +465,19 @@ openshift-install destroy cluster --dir $installationDir
 # INFO Time elapsed: 10s 
 rm -rf $installationDir
 ```
+
+## TO-DOs
+* Automate DC install with Terraform or `govc`
+* Integrate with Azure DevOps Build Agent
+* Add in MetalLB Operator for `LoadBalancer`
+* LDAP for sign-in
+* SSL for ingress
+* `RWX` StorageClass (Azure CSI?)
+* VMWare CSI for StorageClass
+* Maintenance jobs (etcd backup, garbage collection etc)
+* Make master nodes unschedulable
+* ⭐ Onboard Arc
+* Vault?
+* Aqua?
+* ArgoCD?
+* Monitoring - Container Insights/Kusto
