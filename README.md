@@ -84,6 +84,7 @@ Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 # Enable remote desktop
 Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
 ```
+
 ## `OCPLab-DC1`
 
 ### Rename machine
@@ -96,7 +97,11 @@ Rename-Computer -NewName $vmName -LocalCredential $localhostAdminUser -Restart
 
 ### Set Static IP Address
 ```powershell
-$IP = (Get-NetIPAddress | Where-Object {$_.AddressState -eq "Preferred" -and $_.ValidLifetime -lt "24:00:00"}).IPAddress
+# In case we want to start with a DHCP assigned range
+# $IP = (Get-NetIPAddress | Where-Object {$_.AddressState -eq "Preferred" -and $_.ValidLifetime -lt "24:00:00"}).IPAddress
+
+# Start with an IP that we manually test is empty
+$IP = "10.216.175.4"
 $MaskBits = 24 # This means subnet mask = 255.255.255.0 - http://jodies.de/ipcalc?host=255.255.255.0&mask1=24&mask2=
 $Gateway = (Get-NetIPConfiguration | Foreach IPv4DefaultGateway | Select NextHop)."NextHop"
 $DNS = "127.0.0.1"
@@ -163,7 +168,7 @@ $hostname = hostname
 Install-WindowsFeature DHCP -IncludeManagementTools
 
 # Add the DHCP scope to this DC server
-Add-DhcpServerv4Scope -Name 'VLAN-111' -StartRange 10.216.175.6 -Endrange 10.216.175.252 -SubnetMask 255.255.255.0 -State Active
+Add-DhcpServerv4Scope -Name 'VLAN-111' -StartRange 10.216.175.5 -Endrange 10.216.175.254 -SubnetMask 255.255.255.0 -State Active
 
 # Observe the ScopeID just created
 $scopeID = (Get-DHCPServerV4Scope)[0].ScopeId.IPAddressToString
@@ -187,32 +192,27 @@ Get-DhcpServerv4FreeIPAddress -ScopeID $scopeID -NumAddress 5
 As expected, no leases yet:
 ![Result](_images/2.png)
 
+### Configure DNS forwarder so we can browse the web
+```powershell
+# Forward to Redmond DNS
+Add-DnsServerForwarder -IPAddress "10.50.10.50"
+
+# Validate
+Get-DnsServerForwarder
+
+# Check curl to Google
+curl google.com
+```
+
 ## `OCPLab-DEV1`
 
-### Rename machine
-```powershell
-$vmName = "OCPLab-DEV1"
-$password = ConvertTo-SecureString 'acntorPRESTO!' -AsPlainText -Force
-$localhostAdminUser = New-Object System.Management.Automation.PSCredential ('Administrator', $password)
-Rename-Computer -NewName $vmName -LocalCredential $localhostAdminUser -Restart
-```
+Use the `VM Customization Specifications` to
+* Use the vSphere machines name as the hostname
+* Auto domain join to `fg.contoso.com`
+* Since DHCP is configured above, should get an IP address automatically
 
-We reboot the machine through vSphere once.
+Post boot:
+![Result](_images/4.png)
 
-### Join Domain
-```powershell
-$user = "FG\Administrator"
-$domainAdminPassword = "acntorPRESTO!"
-$domainName = 'fg.contoso.com'
-$pass = $domainAdminPassword | ConvertTo-SecureString -AsPlainText -Force
-$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $user, $pass
-add-computer –domainname $domainName -Credential $Credential -restart –force
-```
-
-And after the Client VM reboots:
-
-
-We observe the lease in Domain Controller `OCPLab-DC1` again:
-```powershell
-Get-DhcpServerV4Reservation
-```
+Check leases again:
+![Result](_images/4.png)
