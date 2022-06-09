@@ -8,7 +8,7 @@ govc version
 # govc 0.27.5
 
 govc about
-# FullName:     VMware vCenter Server 7.0.3 build-19717403
+# FullName:     VMware vCenter Server 7.0.3 build-**19717403**
 # Name:         VMware vCenter Server
 # Vendor:       VMware, Inc.
 # Version:      7.0.3
@@ -47,21 +47,21 @@ govc find -h
 
 # Store datacenter name
 dc=$(govc ls /)
-# /Redmond Datacenter
+# /Your Datacenter
 
 # List all VMs
 govc ls /*/vm/*/*/*
-# /Redmond Datacenter/vm/DataSvcPG/PG Dev/OCPLab_Templates/OCPLab-WS2022
-# /Redmond Datacenter/vm/DataSvcPG/PG Dev/OCPLab_VMs/OCPLab-DEV-1
-# /Redmond Datacenter/vm/DataSvcPG/PG Dev/OCPLab_VMs/OCPLab-DC1
+# /Your Datacenter/vm/Foo/Bar/OCPLab_Templates/OCPLab-WS2022
+# /Your Datacenter/vm/Foo/Bar/OCPLab_VMs/OCPLab-DEV-1
+# /Your Datacenter/vm/Foo/Bar/OCPLab_VMs/OCPLab-DC1
 
 # List network
 govc ls /*/network
-# /Redmond Datacenter/network/DataSvc PG VM Network PG (VLAN 106)
+# /Your Datacenter/network/DataSvc PG VM Network PG (VLAN 106)
 
 # List ClusterComputeResource
 govc ls -t ClusterComputeResource host
-# /Redmond Datacenter/host/ArcLab Workload Cluster
+# /Your Datacenter/host/ArcLab Workload Cluster
 
 # Find templates in a specific folder
 template_folder="ArcLab CL Templates"
@@ -75,6 +75,8 @@ govc object.collect -json
 
 ---
 
+# Domain Controller/DNS/DHCP installation
+
 ## Re-imaging prep
 
 ```powershell
@@ -87,27 +89,36 @@ Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' 
 
 ## `OCPLab-DC1`
 
+We do a straightforward deploy, no Customizations (we will rename in RDP just for this one):
+![Deploy](_images/3.png)
+
 ### Rename machine
 ```powershell
 $vmName = "OCPLab-DC1"
 $password = ConvertTo-SecureString 'acntorPRESTO!' -AsPlainText -Force
 $localhostAdminUser = New-Object System.Management.Automation.PSCredential ('Administrator', $password)
 Rename-Computer -NewName $vmName -LocalCredential $localhostAdminUser -Restart
+# Reboots
 ```
 
 ### Set Static IP Address
+
+Make sure to **trigger this whole script from ISE**, because RDP will get booted:
+
 ```powershell
 # In case we want to start with a DHCP assigned range
 # $IP = (Get-NetIPAddress | Where-Object {$_.AddressState -eq "Preferred" -and $_.ValidLifetime -lt "24:00:00"}).IPAddress
 
-# Start with an IP that we manually test is empty
+# Start with an IP that we manually test is empty - i.e. ping $IP
 $IP = "10.216.175.4"
 $MaskBits = 24 # This means subnet mask = 255.255.255.0 - http://jodies.de/ipcalc?host=255.255.255.0&mask1=24&mask2=
 $Gateway = (Get-NetIPConfiguration | Foreach IPv4DefaultGateway | Select NextHop)."NextHop"
 $DNS = "127.0.0.1"
 $IPType = "IPv4"
+
 # Retrieve the network adapter that you want to configure
 $adapter = Get-NetAdapter | ? {$_.Status -eq "up"}
+
 # Remove any existing IP, gateway from our ipv4 adapter
 If (($adapter | Get-NetIPConfiguration).IPv4Address.IPAddress) {
  $adapter | Remove-NetIPAddress -AddressFamily $IPType -Confirm:$false
@@ -115,20 +126,24 @@ If (($adapter | Get-NetIPConfiguration).IPv4Address.IPAddress) {
 If (($adapter | Get-NetIPConfiguration).Ipv4DefaultGateway) {
  $adapter | Remove-NetRoute -AddressFamily $IPType -Confirm:$false
 }
+
  # Configure the IP address and default gateway
 $adapter | New-NetIPAddress `
  -AddressFamily $IPType `
  -IPAddress $IP `
  -PrefixLength $MaskBits `
  -DefaultGateway $Gateway
+
 # Configure the DNS client server IP addresses
 $adapter | Set-DnsClientServerAddress -ServerAddresses $DNS
 
-# Reconnects RDP
+# Reconnect RDP from Laptop with MSFTVPN - should work at 10.216.175.4
 ```
+For example - we see:
 ![Result](_images/1.png)
 
 ### Upgrade to a Domain Controller
+
 ```powershell
 # Configure the Domain Controller
 $domainName = 'fg.contoso.com'
@@ -152,14 +167,17 @@ Install-ADDSForest `
     -Force:$true `
     -SafeModeAdministratorPassword $secureDomainAdminPassword
 
-# Reboots
+# Reboots - takes 2-3 mins at "Please wait for the Group Policy Client" - it's normal for GPO Policiy initialization
 ```
 
-Now we can sign-in as `fg\Administrator` to RDP.
+Now we can sign-in as Domain Admin `fg\Administrator` to RDP.
 
-### Install DHCP
+### Install DHCP on the Domain Controller
+
 ```powershell
 $dnsServerIP = (Get-NetIPAddress | Where-Object {$_.AddressState -eq "Preferred" -and $_.PrefixLength -eq 24}).IPAddress
+# The 24 filter above is because of our mask we set previously
+
 $domainName = 'fg.contoso.com'
 $gateway = (Get-NetIPConfiguration | Foreach IPv4DefaultGateway | Select NextHop)."NextHop"
 $hostname = hostname
@@ -167,7 +185,7 @@ $hostname = hostname
 # Install DHCP
 Install-WindowsFeature DHCP -IncludeManagementTools
 
-# Add the DHCP scope to this DC server
+# Add the DHCP scope to this DC server - from VLAN mapping
 Add-DhcpServerv4Scope -Name 'VLAN-111' -StartRange 10.216.175.5 -Endrange 10.216.175.254 -SubnetMask 255.255.255.0 -State Active
 
 # Observe the ScopeID just created
@@ -193,6 +211,7 @@ As expected, no leases yet:
 ![Result](_images/2.png)
 
 ### Configure DNS forwarder so we can browse the web
+
 ```powershell
 # Forward to Redmond DNS
 Add-DnsServerForwarder -IPAddress "10.50.10.50"
@@ -203,6 +222,7 @@ Get-DnsServerForwarder
 # Check curl to Google
 curl google.com
 ```
+![Result](_images/4.png)
 
 ## `OCPLab-DEV1`
 
@@ -211,8 +231,18 @@ Use the `VM Customization Specifications` to
 * Auto domain join to `fg.contoso.com`
 * Since DHCP is configured above, should get an IP address automatically
 
-Post boot:
-![Result](_images/4.png)
+![Result](_images/5.png)
 
-Check leases again:
-![Result](_images/4.png)
+![Result](_images/6.png)
+
+The VM will go through it's reboot cycles to join the domain etc.
+
+Post boot in `OCPLab-DEV1`:
+![Result](_images/7.png)
+
+![Result](_images/8.png)
+
+Check leases again in Domain Controller:
+![Result](_images/9.png)
+
+Everything is up!
