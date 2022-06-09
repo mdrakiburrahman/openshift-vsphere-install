@@ -33,3 +33,4 @@ override.tf.json
 
 # Secret stuff
 openshift-install/secrets/
+openshift-install/binaries/

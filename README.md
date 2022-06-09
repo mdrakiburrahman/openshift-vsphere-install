@@ -224,7 +224,7 @@ curl google.com
 ```
 ![Result](_images/4.png)
 
-## `OCPLab-DEV1`
+## `OCPLab-DEV-1`
 
 Use the `VM Customization Specifications` to
 * Use the vSphere machines name as the hostname
@@ -283,3 +283,117 @@ We see:
 ![Result](_images/10.png)
 
 ## Generate SSH Key pair for Nodes
+
+```bash
+export secretPath='/workspaces/openshift-vsphere-install/openshift-install/secrets'
+mkdir -p $secretPath/.ssh
+
+# Generate Key Pair
+ssh-keygen -t ed25519 -N '' -f $secretPath/.ssh/id_ed25519
+
+# View public key
+cat $secretPath/.ssh/id_ed25519.pub
+# ssh-ed25519 AAAAC3NzaC...
+```
+
+Add the SSH private key to `ssh-agent`:
+```bash
+# Ensure up
+eval "$(ssh-agent -s)"
+# Agent pid 30724
+
+ssh-add $secretPath/.ssh/id_ed25519
+# Identity added: /workspaces/openshift-vsphere-install/openshift-install/secrets/.ssh/id_ed25519 ...
+```
+
+## Pulling the OpenShift installation binary
+```bash
+cd '/workspaces/openshift-vsphere-install/openshift-install/binaries'
+wget https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-install-linux.tar.gz
+tar -xvf openshift-install-linux.tar.gz
+# README.md
+# openshift-install
+
+mv openshift-install /usr/local/bin/
+chmod +x /usr/local/bin/openshift-install
+```
+
+## Download vCenter root CA Cert into this container
+```bash
+cd $secretPath
+wget https://arclab-vc.arclab.local/certs/download.zip --no-check-certificate
+unzip download.zip
+
+# Add certs to Container OS
+cp certs/lin/* /usr/local/share/ca-certificates
+cp certs/lin/* /etc/ssl/certs
+update-ca-certificates --verbose --fresh
+# ...
+# link Trustwave_Global_Certification_Authority.pem -> f249de83.0
+# 128 added, 0 removed; done.
+# Running hooks in /etc/ca-certificates/update.d...
+# done.
+```
+
+## DNS Hack
+
+Because we are deploying into _another_ domain and we cannot set up conditional forwarders from this domain, we add a host entry for the brand-new APIServer:
+```bash
+echo "10.216.175.6 api.arcci.fg.contoso.com" >> /etc/hosts
+cat /etc/hosts
+```
+> But we cannot deal with `*.apps.arcci.fg.contoso.com` via this hack since `/etc/host` doesn't support wldcards. Maybe we can use CoreDNS or something or another workaround if `*.apps` needs to be accessed for some reason.
+---
+
+## Install on vSphere in IPI mode
+```bash
+export installationDir='/workspaces/openshift-vsphere-install/openshift-install/secrets/installation-assets'
+mkdir  -p $installationDir
+cd $installationDir
+
+# Create config file
+openshift-install create install-config
+# ? Platform vsphere
+# ? vCenter arclab-vc.arclab.local
+# ? Username your-sa@arclab.local
+# ? Password [? for help] **********
+# INFO Connecting to vCenter arclab-vc.arclab.local 
+# INFO Defaulting to only available datacenter: Your Datacenter 
+# INFO Defaulting to only available cluster: ArcLab Workload Cluster 
+# INFO Defaulting to only available datastore: ArcLab-NFS-01 
+# ? Network DataSvc PG OCP VM Network (VLAN 111)
+# ? Virtual IP Address for API 10.216.175.6
+# ? Virtual IP Address for Ingress 10.216.175.7
+# ? Base Domain fg.contoso.com
+# ? Cluster Name arcci
+# ? Pull Secret [? for help] ********************************
+# INFO Install-Config created in: .
+
+# Fire install
+openshift-install create cluster --log-level=debug
+# INFO Consuming Install Config from target directory 
+# INFO Obtaining RHCOS image file from 'https://rhcos-redirector.apps.art.xq1c.p1.openshiftapps.com/art/storage/releases/rhcos-4.10/410.84.202205191234-0/x86_64/rhcos-410.84.202205191234-0-vmware.x86_64.ova?sha256=' 
+# INFO Creating infrastructure resources...
+
+# ....
+# DEBUG Still waiting for the Kubernetes API: Get "https://api.arcci.fg.contoso.com:6443/version": dial tcp 10.216.175.6:6443: connect: connection refused 
+# INFO API v1.23.5+3afdacb up                       
+# INFO Waiting up to 30m0s (until 4:28AM) for bootstrapping to complete... 
+#...
+
+# 
+```
+
+## Access from `OCPLab-DEV-1`
+
+```PowerShell
+# Download oc cli
+$chocoPath = "C:\ProgramData\chocolatey\bin"
+$ocPath = "https://access.cdn.redhat.com/content/origin/files/sha256/b5/b5be74fba204c3c71f14ad9f20c4432215861b9e83008bd597445b77b7d71aec/oc-4.10.17-windows.zip?user=9f0797baa5932892e224995847e5b117&_auth_=1654762464_3d3e28adce1ce122828a13a5a48c87f4"
+$downloadZip = "oc-4.10.17-windows.zip"
+
+cd $chocoPath
+Invoke-WebRequest $ocPath -OutFile "$chocoPath\$downloadZip"
+Expand-Archive -Path $downloadZip -DestinationPath $chocoPath
+rm README.md
+```
