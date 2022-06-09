@@ -90,6 +90,7 @@ Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' 
 ## `OCPLab-DC1`
 
 We do a straightforward deploy, no Customizations (we will rename in RDP just for this one):
+
 ![Deploy](_images/3.png)
 
 ### Rename machine
@@ -221,6 +222,9 @@ Get-DnsServerForwarder
 
 # Check curl to Google
 curl google.com
+
+# Forward queries for arclab.local to ArcLab-DC
+Add-DnsServerConditionalForwarderZone -Name "arclab.local" -MasterServers "10.216.173.10" # ArcLab-DC.arclab.local
 ```
 ![Result](_images/4.png)
 
@@ -249,11 +253,54 @@ Everything is up!
 
 ---
 
+# DNS Hack for this VSCode Devcontainer
+
+Because we are deploying into _another_ domain and we cannot set up conditional forwarders from this domain, we add a host entry for the vCenter server, and then change the DNS resolver to our new domain controller:
+```bash
+# Add the IP Address of vCenter in our container's host file
+cat << EOF > /etc/hosts
+127.0.0.1       localhost
+::1     localhost ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+172.17.0.2      43e20c563f6e
+10.216.173.11 arclab-vc.arclab.local
+EOF
+```
+
+But we cannot deal with `*.apps.arcci.fg.contoso.com` via this hack since `/etc/host` doesn't support wldcards - so we point our DNS resolver to `OCPLab-DC1`:
+
+```bash
+cat << EOF > /etc/resolv.conf
+# DNS requests are forwarded to the host. DHCP DNS options are ignored.
+nameserver 10.216.175.4                 # fg.contoso.com
+EOF
+
+# DNS Tests
+nslookup api.arcci.fg.contoso.com
+# Address: 10.216.175.6
+nslookup console-that-doesnt-exist-yet.apps.arcci.fg.contoso.com
+# Address: 10.216.175.7
+nslookup quay.io
+# Address: 3.227.212.61
+
+# nslookup doesn't respect host entry, so we can run curl
+curl https://arclab-vc.arclab.local -k
+# <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+# <html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+#  <head>
+#   <meta http-equiv="content-type" content="text/html; charset=utf-8">
+```
+
+---
+
 # OpenShift `IPI`-based install - Cluster Name: `arcci`
 
 > `IPI` because we want horizontal scalability on our `MachineSets`
 
-## Add a Reverse Lookup Zone
+## Add a Reverse Lookup Zone on `OCPLab-DC1`
 ```powershell
 # Add a reverse lookup zone - VLAN 111
 Add-DnsServerPrimaryZone -NetworkId "10.216.175.0/24" -ReplicationScope Domain
@@ -267,7 +314,7 @@ ForEach ($Zone in $Zones) {
 }
 ```
 
-## DNS records for OpenShift - [from here](https://github.com/openshift/installer/blob/master/docs/user/vsphere/vips-dns.md#dns-records)
+## DNS records for OpenShift in `OCPLab-DC1` - [from here](https://github.com/openshift/installer/blob/master/docs/user/vsphere/vips-dns.md#dns-records)
 
 ```PowerShell
 $clusterName = 'arcci'
@@ -282,7 +329,7 @@ Add-DnsServerResourceRecordA -Name "*.apps.$clusterName" -ZoneName $baseDomain -
 We see:
 ![Result](_images/10.png)
 
-## Generate SSH Key pair for Nodes
+## Generate SSH Key pair for Nodes - `DevContainer`
 
 ```bash
 export secretPath='/workspaces/openshift-vsphere-install/openshift-install/secrets'
@@ -311,18 +358,21 @@ ssh-add $secretPath/.ssh/id_ed25519
 cd '/workspaces/openshift-vsphere-install/openshift-install/binaries'
 wget https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-install-linux.tar.gz
 tar -xvf openshift-install-linux.tar.gz
-# README.md
-# openshift-install
+# README.md                 <- useless
+# openshift-install         <- useful
 
 mv openshift-install /usr/local/bin/
 chmod +x /usr/local/bin/openshift-install
+rm README.md
 ```
 
 ## Download vCenter root CA Cert into this container
 ```bash
 cd $secretPath
+rm -rf certs
 wget https://arclab-vc.arclab.local/certs/download.zip --no-check-certificate
 unzip download.zip
+rm -rf download.zip
 
 # Add certs to Container OS
 cp certs/lin/* /usr/local/share/ca-certificates
@@ -335,14 +385,6 @@ update-ca-certificates --verbose --fresh
 # done.
 ```
 
-## DNS Hack
-
-Because we are deploying into _another_ domain and we cannot set up conditional forwarders from this domain, we add a host entry for the brand-new APIServer:
-```bash
-echo "10.216.175.6 api.arcci.fg.contoso.com" >> /etc/hosts
-cat /etc/hosts
-```
-> But we cannot deal with `*.apps.arcci.fg.contoso.com` via this hack since `/etc/host` doesn't support wldcards. Maybe we can use CoreDNS or something or another workaround if `*.apps` needs to be accessed for some reason.
 ---
 
 ## Install on vSphere in IPI mode
@@ -384,7 +426,7 @@ openshift-install create cluster --log-level=debug
 # 
 ```
 
-## Access from `OCPLab-DEV-1`
+## Access oc from `OCPLab-DEV-1`
 
 ```PowerShell
 # Download oc cli
@@ -396,4 +438,26 @@ cd $chocoPath
 Invoke-WebRequest $ocPath -OutFile "$chocoPath\$downloadZip"
 Expand-Archive -Path $downloadZip -DestinationPath $chocoPath
 rm README.md
+
+# Add host entry for vCenter
+$file = "C:\Windows\System32\drivers\etc\hosts"
+$hostfile = Get-Content $file
+$hostfile += "10.216.173.11 arclab-vc.arclab.local"
+Set-Content -Path $file -Value $hostfile -Force
+```
+
+## Clean destroy
+
+```bash
+openshift-install destroy cluster --dir $installationDir
+# INFO Destroyed                                     VirtualMachine=arcci-7p7gn-rhcos
+# INFO Destroyed                                     VirtualMachine=arcci-7p7gn-bootstrap
+# INFO Destroyed                                     VirtualMachine=arcci-7p7gn-master-2
+# INFO Destroyed                                     VirtualMachine=arcci-7p7gn-master-1
+# INFO Destroyed                                     VirtualMachine=arcci-7p7gn-master-0
+# INFO Destroyed                                     Folder=arcci-7p7gn
+# INFO Destroyed                                     Tag=arcci-7p7gn
+# INFO Destroyed                                     TagCategory=openshift-arcci-7p7gn
+# INFO Time elapsed: 10s 
+rm -rf $installationDir
 ```

@@ -75,7 +75,8 @@ RUN apt-get update \
     && apt-get install make -y \
     && apt-get install asciinema -y \
     && apt-get install tmux -y \
-    && apt-get install graphviz -y
+    && apt-get install graphviz -y \
+    && apt-get install dnsutils -y
 
 # Install yq
 # Latest on https://launchpad.net/~rmescandon/+archive/ubuntu/yq is v4.25.1
