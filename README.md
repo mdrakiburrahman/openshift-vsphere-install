@@ -253,49 +253,6 @@ Everything is up!
 
 ---
 
-# DNS Hack for this VSCode Devcontainer
-
-Because we are deploying into _another_ domain and we cannot set up conditional forwarders from this domain, we add a host entry for the vCenter server, and then change the DNS resolver to our new domain controller:
-```bash
-# Add the IP Address of vCenter in our container's host file
-cat << EOF > /etc/hosts
-127.0.0.1       localhost
-::1     localhost ip6-localhost ip6-loopback
-fe00::0 ip6-localnet
-ff00::0 ip6-mcastprefix
-ff02::1 ip6-allnodes
-ff02::2 ip6-allrouters
-172.17.0.2      43e20c563f6e
-10.216.173.11 arclab-vc.arclab.local
-EOF
-```
-
-But we cannot deal with `*.apps.arcci.fg.contoso.com` via this hack since `/etc/host` doesn't support wldcards - so we point our DNS resolver to `OCPLab-DC1`:
-
-```bash
-cat << EOF > /etc/resolv.conf
-# DNS requests are forwarded to the host. DHCP DNS options are ignored.
-nameserver 10.216.175.4                 # fg.contoso.com
-EOF
-
-# DNS Tests
-nslookup api.arcci.fg.contoso.com
-# Address: 10.216.175.6
-nslookup console-that-doesnt-exist-yet.apps.arcci.fg.contoso.com
-# Address: 10.216.175.7
-nslookup quay.io
-# Address: 3.227.212.61
-
-# nslookup doesn't respect host entry, so we can run curl
-curl https://arclab-vc.arclab.local -k
-# <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-# <html xmlns="http://www.w3.org/1999/xhtml" lang="en">
-#  <head>
-#   <meta http-equiv="content-type" content="text/html; charset=utf-8">
-```
-
----
-
 # OpenShift `IPI`-based install - Cluster Name: `arcci`
 
 > `IPI` because we want horizontal scalability on our `MachineSets`
@@ -329,10 +286,40 @@ Add-DnsServerResourceRecordA -Name "*.apps.$clusterName" -ZoneName $baseDomain -
 We see:
 ![Result](_images/10.png)
 
-## Generate SSH Key pair for Nodes - `DevContainer`
+> We are now ready to deploy OpenShift from our container
+
+---
+# `devcontainer` prep
 
 ```bash
+# = = = = = = = = = = = = = = = = = = = 
+# DNS Hack for this VSCode Devcontainer
+# = = = = = = = = = = = = = = = = = = = 
+
+# We will point this container to use `OCPLab-DC.fg.contoso.com` as the DNS resolver
+# Since `OCPLab-DC` has conditional forwarding for `arclab.local`, and the internet (via Redmond resolver), we should be covered
+cat << EOF > /etc/resolv.conf
+# DNS requests are forwarded to the host. DHCP DNS options are ignored.
+nameserver 10.216.175.4                 # OCPLab-DC.fg.contoso.com
+EOF
+
+# DNS Tests
+nslookup api.arcci.fg.contoso.com
+# Address: 10.216.175.6
+nslookup console-that-doesnt-exist-yet.apps.arcci.fg.contoso.com
+# Address: 10.216.175.7
+nslookup quay.io
+# Address: 3.227.212.61
+nslookup arclab-vc.arclab.local
+# Address: 10.216.173.11
+nslookup arclab-wl-esxi-02.arclab.local
+# Address: 10.216.152.12
+
+# = = = = = = = = = = = = = = = = = = = = = = = = =
+# Generate SSH Key pair for Nodes - `DevContainer`
+# = = = = = = = = = = = = = = = = = = = = = = = = =
 export secretPath='/workspaces/openshift-vsphere-install/openshift-install/secrets'
+rm -rf $secretPath
 mkdir -p $secretPath/.ssh
 
 # Generate Key Pair
@@ -341,21 +328,22 @@ ssh-keygen -t ed25519 -N '' -f $secretPath/.ssh/id_ed25519
 # View public key
 cat $secretPath/.ssh/id_ed25519.pub
 # ssh-ed25519 AAAAC3NzaC...
-```
 
-Add the SSH private key to `ssh-agent`:
-```bash
-# Ensure up
-eval "$(ssh-agent -s)"
+# Add the SSH private key to `ssh-agent`
+eval "$(ssh-agent -s)" # Ensure process is running
 # Agent pid 30724
 
 ssh-add $secretPath/.ssh/id_ed25519
 # Identity added: /workspaces/openshift-vsphere-install/openshift-install/secrets/.ssh/id_ed25519 ...
-```
 
-## Pulling the OpenShift installation binary
-```bash
-cd '/workspaces/openshift-vsphere-install/openshift-install/binaries'
+# = = = = = = = = = = = = = = = = = = = = = =
+# Pulling the OpenShift installation binary
+# = = = = = = = = = = = = = = = = = = = = = =
+export binaryPath='/workspaces/openshift-vsphere-install/openshift-install/binaries'
+rm -rf $binaryPath
+mkdir -p $binaryPath
+cd $binaryPath
+
 wget https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-install-linux.tar.gz
 tar -xvf openshift-install-linux.tar.gz
 # README.md                 <- useless
@@ -364,10 +352,10 @@ tar -xvf openshift-install-linux.tar.gz
 mv openshift-install /usr/local/bin/
 chmod +x /usr/local/bin/openshift-install
 rm README.md
-```
 
-## Download vCenter root CA Cert into this container
-```bash
+# = = = = = = = = = = = = = = = = = = = = = = = = = 
+# Download vCenter root CA Cert into this container
+# = = = = = = = = = = = = = = = = = = = = = = = = = 
 cd $secretPath
 rm -rf certs
 wget https://arclab-vc.arclab.local/certs/download.zip --no-check-certificate
@@ -380,17 +368,20 @@ cp certs/lin/* /etc/ssl/certs
 update-ca-certificates --verbose --fresh
 # ...
 # link Trustwave_Global_Certification_Authority.pem -> f249de83.0
-# 128 added, 0 removed; done.
+# 127 added, 0 removed; done.
 # Running hooks in /etc/ca-certificates/update.d...
 # done.
 ```
 
+> Our devcontainer now has everything it needs to deploy OpenShift
+
 ---
 
-## Install on vSphere in IPI mode
+## Deploy OCP on vSphere in IPI mode
 ```bash
 export installationDir='/workspaces/openshift-vsphere-install/openshift-install/secrets/installation-assets'
-mkdir  -p $installationDir
+rm -rf $installationDir
+mkdir -p $installationDir
 cd $installationDir
 
 # Create config file
@@ -426,7 +417,7 @@ openshift-install create cluster --log-level=debug
 # 
 ```
 
-## Access oc from `OCPLab-DEV-1`
+## Access `oc` and vSphere from `OCPLab-DEV-1`
 
 ```PowerShell
 # Download oc cli
@@ -438,12 +429,6 @@ cd $chocoPath
 Invoke-WebRequest $ocPath -OutFile "$chocoPath\$downloadZip"
 Expand-Archive -Path $downloadZip -DestinationPath $chocoPath
 rm README.md
-
-# Add host entry for vCenter
-$file = "C:\Windows\System32\drivers\etc\hosts"
-$hostfile = Get-Content $file
-$hostfile += "10.216.173.11 arclab-vc.arclab.local"
-Set-Content -Path $file -Value $hostfile -Force
 ```
 
 ## Clean destroy
