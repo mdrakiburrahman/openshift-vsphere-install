@@ -246,3 +246,10 @@ Check leases again in Domain Controller:
 ![Result](_images/9.png)
 
 Everything is up!
+
+---
+
+# OpenShift `IPI`-based install
+
+> `IPI` because we want horizontal scalability on our `MachineSets`
+
