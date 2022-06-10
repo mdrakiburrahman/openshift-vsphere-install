@@ -467,21 +467,28 @@ rm -rf $installationDir
 ```
 
 ## TO-DOs
-- [ ] VMWare CSI for StorageClass
-- [ ] Maintenance jobs (etcd backup, garbage collection etc)
+
+### Main
 - [ ] Make master nodes unschedulable
 - [ ] LDAP for sign-in
-- [ ] ArgoCD
-- [ ] Add in MetalLB Operator for `LoadBalancer`
-- [ ] SSL for ingress
+- [ ] ArgoCD AoA - subpath in same repo? Different repo?
+  - [ ] Add in MetalLB Operator for `LoadBalancer`
+  - [ ] ...
+  - [ ] MIAA manifests
+- [ ] VMWare CSI for StorageClass
 - [ ] `RWX` StorageClass (Azure CSI?)
 - [ ] ⭐ Onboard Arc via a `job`
-- [ ] Integrate with Azure DevOps Build Agent
-- [ ] Monitoring - Container Insights/Kusto
+- [ ] Integrate a basic deploy with Azure DevOps Build Agent
+  - [ ] Setup Build Agent in vSphere in this repo
+  - [ ] `kubectl apply` to OCP
+
+### Extras
+- [ ] Monitoring integration - Container Insights/Kusto
 - [ ] Some Teams Alerting Webhook (e.g. out of space on `logsdb`)?
-- [ ] Automate DC install 
+- [ ] Automate VM install 
     - With Terraform vSphere provider or `govc`
     - Terratest for validation
+    - Include Build Agent
     - Build a Modules repo that this main one pulls from as needed
 - [ ] Vault?
 - [ ] Aqua?
