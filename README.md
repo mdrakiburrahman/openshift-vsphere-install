@@ -467,21 +467,21 @@ rm -rf $installationDir
 ```
 
 ## TO-DOs
-- [ ] Integrate with Azure DevOps Build Agent
-- [ ] Add in MetalLB Operator for `LoadBalancer`
-- [ ] LDAP for sign-in
-- [ ] SSL for ingress
-- [ ] `RWX` StorageClass (Azure CSI?)
 - [ ] VMWare CSI for StorageClass
 - [ ] Maintenance jobs (etcd backup, garbage collection etc)
 - [ ] Make master nodes unschedulable
+- [ ] LDAP for sign-in
+- [ ] ArgoCD
+- [ ] Add in MetalLB Operator for `LoadBalancer`
+- [ ] SSL for ingress
+- [ ] `RWX` StorageClass (Azure CSI?)
 - [ ] ⭐ Onboard Arc via a `job`
-- [ ] Vault?
-- [ ] Aqua?
-- [ ] ArgoCD?
+- [ ] Integrate with Azure DevOps Build Agent
 - [ ] Monitoring - Container Insights/Kusto
 - [ ] Some Teams Alerting Webhook (e.g. out of space on `logsdb`)?
 - [ ] Automate DC install 
     - With Terraform vSphere provider or `govc`
     - Terratest for validation
     - Build a Modules repo that this main one pulls from as needed
+- [ ] Vault?
+- [ ] Aqua?
