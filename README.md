@@ -467,7 +467,6 @@ rm -rf $installationDir
 ```
 
 ## TO-DOs
-- [ ] Automate DC install with Terraform or `govc`
 - [ ] Integrate with Azure DevOps Build Agent
 - [ ] Add in MetalLB Operator for `LoadBalancer`
 - [ ] LDAP for sign-in
@@ -481,4 +480,8 @@ rm -rf $installationDir
 - [ ] Aqua?
 - [ ] ArgoCD?
 - [ ] Monitoring - Container Insights/Kusto
-- [ ] Some Teams Webhook?
+- [ ] Some Teams Alerting Webhook (e.g. out of space on `logsdb`)?
+- [ ] Automate DC install 
+    - With Terraform vSphere provider or `govc`
+    - Terratest for validation
+    - Build a Modules repo that this main one pulls from as needed
