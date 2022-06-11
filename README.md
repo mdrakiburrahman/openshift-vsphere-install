@@ -430,6 +430,18 @@ openshift-install create cluster --log-level=debug
 # DEBUG  Cluster Operators: 14m22s                   
 # INFO Time elapsed: 29m15s  
 # 
+
+# Test access
+export KUBECONFIG=/workspaces/openshift-vsphere-install/openshift-install/secrets/installation-assets/auth/kubeconfig
+
+oc get nodes
+# NAME                       STATUS   ROLES    AGE   VERSION
+# arcci-jlzvv-master-0       Ready    master   40m   v1.23.5+3afdacb
+# arcci-jlzvv-master-1       Ready    master   40m   v1.23.5+3afdacb
+# arcci-jlzvv-master-2       Ready    master   40m   v1.23.5+3afdacb
+# arcci-jlzvv-worker-sfxxl   Ready    worker   40m   v1.23.5+3afdacb
+# arcci-jlzvv-worker-wclv7   Ready    worker   38m   v1.23.5+3afdacb
+# arcci-jlzvv-worker-zpng2   Ready    worker   40m   v1.23.5+3afdacb
 ```
 
 Complete:
@@ -466,11 +478,202 @@ openshift-install destroy cluster --dir $installationDir
 rm -rf $installationDir
 ```
 
+---
+
+# Post deploy enhancements
+
+## Ensure master nodes are unschedulable
+
+> Ref: https://access.redhat.com/documentation/en-us/openshift_container_platform/4.2/html/nodes/working-with-nodes#nodes-nodes-working-master-schedulable_nodes-nodes-working
+
+```bash
+oc get schedulers cluster -o yaml | yq .spec.mastersSchedulable
+# false
+```
+
+## LDAP for sign-in
+
+> Ref: 
+> * https://docs.openshift.com/container-platform/4.7/authentication/identity_providers/configuring-ldap-identity-provider.html
+> * https://youtu.be/RG6xt2q72nw?t=2508
+> * https://gist.github.com/acsulli/5acdb1de102b4771553bb9e4b458cb21
+> * https://docs.openshift.com/container-platform/4.7/authentication/ldap-syncing.html#ldap-syncing-nesting_ldap-syncing-groups
+> * https://github.com/redhat-cop/group-sync-operator
+
+### Disable self-provisioning
+
+> Ref: https://docs.openshift.com/container-platform/4.10/applications/projects/configuring-project-creation.html#disabling-project-self-provisioning_configuring-project-creation
+
+Because stops from random people using up compute.
+
+```bash
+# Remove system:authenticated:oauth group from self-provisioners ClusterRoleBinding
+oc patch clusterrolebinding.rbac self-provisioners -p '{"subjects": null}'
+
+# Remove auto-update
+oc patch clusterrolebinding.rbac self-provisioners -p '{ "metadata": { "annotations": { "rbac.authorization.kubernetes.io/autoupdate": "false" } } }'
+
+# Customize message
+cat <<EOF | oc apply -f -
+apiVersion: config.openshift.io/v1
+kind: Project
+metadata:
+    name: cluster
+spec:
+    projectRequestMessage: This cluster is for Arc CI only, you may not create a new Project manually.
+EOF
+```
+
+### LDAP configuration on `OCPLab-DC1`
+
+#### Create AD demo objects
+* OU: `Arc CI`
+* 2 groups:
+    * `arcci-users`
+    * `arcci-admins`
+* 1 users:
+    * `boor` - `arcci-users`
+    * `Administrator` (existing) - `arcci-admins`
+* 1 sa:
+    * `openshift-sa` - for authenticating LDAP users
+
+```powershell
+Import-Module ActiveDirectory
+
+# New OUs
+New-ADOrganizationalUnit -Name "Arc CI" -Path "DC=FG,DC=CONTOSO,DC=COM"
+New-ADOrganizationalUnit -Name "Users" -Path "OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM"
+New-ADOrganizationalUnit -Name "Admins" -Path "OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM"
+New-ADOrganizationalUnit -Name "Service Accounts" -Path "OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM"
+New-ADOrganizationalUnit -Name "Groups" -Path "OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM"
+
+# Create Users/SAs (same thing)
+$pass = "acntorPRESTO!" | ConvertTo-SecureString -AsPlainText -Force
+
+New-ADUser -Name "boor" `
+           -UserPrincipalName "boor@fg.contoso.com" `
+           -Path "OU=Users,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM" `
+           -AccountPassword $pass `
+           -Enabled $true `
+           -ChangePasswordAtLogon $false `
+           -PasswordNeverExpires $true
+
+New-ADUser -Name "openshift-sa" `
+           -UserPrincipalName "openshift-sa@fg.contoso.com" `
+           -Path "OU=Service Accounts,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM" `
+           -AccountPassword $pass `
+           -Enabled $true `
+           -ChangePasswordAtLogon $false `
+           -PasswordNeverExpires $true
+
+# Create Groups
+New-ADGroup -Name "arcci-users" `
+            -SamAccountName arcci-users `
+            -GroupCategory Security `
+            -GroupScope Universal `
+            -DisplayName "Arc CI Env Regular Users" `
+            -Path "OU=Groups,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM" `
+            -Description "Members of this group are Arc CI Environment - e.g. OpenShift - regular users"
+
+New-ADGroup -Name "arcci-admins" `
+            -SamAccountName arcci-admins `
+            -GroupCategory Security `
+            -GroupScope Universal `
+            -DisplayName "Arc CI Env Admin Users" `
+            -Path "OU=Groups,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM" `
+            -Description "Members of this group are Arc CI Environment - e.g. OpenShift - administrators"
+
+# Assign Users to Groups
+Add-ADGroupMember -Identity arcci-users -Members boor
+Add-ADGroupMember -Identity arcci-admins -Members Administrator
+
+# Move my Administrator user to this OU
+Get-ADUser -Identity Administrator | Move-ADObject -TargetPath "OU=Users,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM"
+```
+
+We see:
+![Result](_images/12.png)
+
+#### Configure OpenShift AuthN
+
+```bash
+# Create a secret for the bindDN SA - openshift-sa - password
+oc create secret generic ldap-bind-secret \
+  --from-literal=bindPassword=acntorPRESTO! \
+  -n openshift-config
+
+# Validate bind
+ldapsearch -h fg.contoso.com -x -D "CN=openshift-sa,OU=Service Accounts,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM" -w "acntorPRESTO!" -p 389 -b "DC=FG,DC=CONTOSO,DC=COM" -s sub "sAMAccountName=openshift-sa"
+# ref: ldap://fg.contoso.com/CN=Configuration,DC=fg,DC=contoso,DC=com
+# search result
+# search: 2
+# result: 0 Success
+# numResponses: 5
+# numEntries: 1
+# numReferences: 3
+
+# Operator status before apply
+oc get co | grep authentication -B 1
+# NAME                                       VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
+# authentication                             4.10.16   True        False         False      41h
+
+# Create the OAuth config file, insecure because we don't have a CA
+cat <<EOF | oc apply -f -
+apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  name: cluster
+spec:
+  identityProviders:
+    - ldap:
+        attributes:
+          email:
+            - mail
+          id:
+            - sAMAccountName
+          name:
+            - cn
+          preferredUsername:
+            - sAMAccountName
+        bindDN: CN=openshift-sa,OU=Service Accounts,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM
+        bindPassword:
+          name: ldap-bind-secret
+        insecure: true
+        url: "ldap://fg.contoso.com/OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM?sAMAccountName?sub?(&(objectClass=user)(|(memberOf:1.2.840.113556.1.4.1941:=CN=arcci-admins,OU=Groups,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM)(memberOf:1.2.840.113556.1.4.1941:=CN=arcci-users,OU=Groups,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM)))"
+      mappingMethod: claim
+      name: fg.contoso.com
+      type: LDAP
+EOF
+
+# We see
+oc get co | grep authentication -B 1
+# NAME                                       VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
+# authentication                             4.10.16   True        True          False      41h     OAuthServerDeploymentProgressing: deployment/oauth-openshift.openshift-authentication: 2/3 pods have been updated to the latest generation
+
+# NAME                                       VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
+# authentication                             4.10.16   True        False         False      41h  
+
+# At this point, authentication will work
+```
+![Result](_images/13.png)
+
+#### Configure OpenShift AuthZ
+
+
+### Remove kubeadmin
+
+> Ref: https://docs.openshift.com/container-platform/4.10/authentication/remove-kubeadmin.html
+
+---
+
 ## TO-DOs
 
 ### Main
-- [ ] Make master nodes unschedulable
-- [ ] LDAP for sign-in
+- [X] Make master nodes unschedulable
+- [X] Disable self provisioning
+- [X] LDAP for sign-in
+  - [X] Create an AD Group script for Cluster-Admins, add people
+  - [ ] AuthZ and Group Sync
 - [ ] ArgoCD AoA - subpath in same repo? Different repo?
   - [ ] Add in MetalLB Operator for `LoadBalancer`
   - [ ] ...
