@@ -657,12 +657,130 @@ oc get co | grep authentication -B 1
 ```
 ![Result](_images/13.png)
 
-#### Configure OpenShift AuthZ
+#### Configure Group Sync and AuthZ
 
+> Ref:
+> * https://gist.github.com/acsulli/5acdb1de102b4771553bb9e4b458cb21#group-sync-cronjob
+> * https://examples.openshift.pub/cluster-configuration/authentication/activedirectory-ldap/#deploy-recular-sync-via-cronjobscheduledjob
 
-### Remove kubeadmin
+```bash
+export authZ="/workspaces/openshift-vsphere-install/AuthZ"
+rm -rf $authZ
+mkdir -p $authZ
+cd $authZ
 
-> Ref: https://docs.openshift.com/container-platform/4.10/authentication/remove-kubeadmin.html
+# Create the group sync config file
+# the groupUIDNameMapping is added to avoid spaces in the group names
+cat << EOF > ldap-sync.yaml
+kind: LDAPSyncConfig
+apiVersion: v1
+url: ldap://fg.contoso.com
+bindDN: CN=openshift-sa,OU=Service Accounts,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM
+bindPassword: 'acntorPRESTO!'
+insecure: true
+groupUIDNameMapping:
+  "CN=arcci-users,OU=Groups,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM": arcci-users
+  "CN=arcci-admins,OU=Groups,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM": arcci-admins
+augmentedActiveDirectory:
+  groupsQuery:
+    derefAliases: never
+    pageSize: 0
+  groupUIDAttribute: dn
+  groupNameAttributes: [ cn ]
+  usersQuery:
+    baseDN: "OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM"
+    scope: sub
+    derefAliases: never
+    filter: (objectclass=person)
+    pageSize: 0
+  userNameAttributes: [ sAMAccountName ]
+  groupMembershipAttributes: [ "memberOf:1.2.840.113556.1.4.1941:" ]
+EOF
+
+# Since we're using nested groups, we'll need an allow list as well
+cat << EOF > group-allowlist.txt
+CN=arcci-users,OU=Groups,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM
+CN=arcci-admins,OU=Groups,OU=Arc CI,DC=FG,DC=CONTOSO,DC=COM
+EOF
+
+# Group Sync CronJob
+oc create ns ldap-sync
+
+# Create a Secret with the relevant files
+oc create secret generic ldap-sync -n ldap-sync \
+ --from-file=ldap-sync.yaml=ldap-sync.yaml \
+ --from-file=group-allowlist.txt=group-allowlist.txt
+
+# ClusterRole
+oc create clusterrole ldap-group-sync \
+ --verb=create,update,patch,delete,get,list \
+ --resource=groups.user.openshift.io
+
+# Create a Project, ServiceAccount, and ClusterRoleBinding
+oc create sa ldap-sync -n ldap-sync
+oc adm policy add-cluster-role-to-user ldap-group-sync \
+  -z ldap-sync \
+  -n ldap-sync
+
+# Create the CronJob
+cat << EOF | oc apply -n ldap-sync -f -
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: ldap-group-sync
+  namespace: ldap-sync
+spec:
+  schedule: "*/30 * * * *"
+  suspend: false
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: ldap-sync
+          restartPolicy: Never
+          containers:
+            - name: oc-cli
+              command:
+                - /bin/oc
+                - adm
+                - groups
+                - sync
+                - --whitelist=/ldap-sync/group-allowlist.txt
+                - --sync-config=/ldap-sync/ldap-sync.yaml
+                - --confirm
+              image: registry.redhat.io/openshift4/ose-cli
+              imagePullPolicy: Always
+              volumeMounts:
+              - mountPath: /ldap-sync/
+                name: config
+                readOnly: true
+          volumes:
+          - name: config
+            secret:
+              defaultMode: 420
+              secretName: ldap-sync
+EOF
+
+# Validate
+oc get groups
+# NAME           USERS
+# arcci-admins   Administrator
+# arcci-users    boor
+
+# Assign RBAC to group
+oc adm policy add-cluster-role-to-group cluster-admin arcci-admins
+oc adm policy add-cluster-role-to-group cluster-reader arcci-users
+```
+
+We see:
+
+`boor` - read-only:
+![Result](_images/14.png)
+
+`Administrator` - read-write:
+![Result](_images/15.png)
+
+> Also, note that `boor` cannot read Secrets - which is good.
 
 ---
 
@@ -673,7 +791,7 @@ oc get co | grep authentication -B 1
 - [X] Disable self provisioning
 - [X] LDAP for sign-in
   - [X] Create an AD Group script for Cluster-Admins, add people
-  - [ ] AuthZ and Group Sync
+  - [X] AuthZ and Group Sync
 - [ ] ArgoCD AoA - subpath in same repo? Different repo?
   - [ ] Add in MetalLB Operator for `LoadBalancer`
   - [ ] ...
