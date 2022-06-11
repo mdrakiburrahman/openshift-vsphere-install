@@ -788,9 +788,29 @@ We see:
 
 > Ref:
 > * https://docs.openshift.com/container-platform/4.8/storage/container_storage_interface/persistent-storage-csi-vsphere.html
+> * https://docs.openshift.com/container-platform/4.9/storage/persistent_storage/persistent-storage-vsphere.html
+> * (`RWO` looks like) https://docs.openshift.com/container-platform/4.9/storage/understanding-persistent-storage.html#pv-access-modes_understanding-persistent-storage
 
 Looks like we get this for free with IPI!
 ![Result](_images/16.png)
+
+We change the default `storageclass`
+```bash
+oc patch storageclass thin -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+oc patch storageclass thin-csi -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+# NAME                 PROVISIONER                    RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+# thin                 kubernetes.io/vsphere-volume   Delete          Immediate              false                  2d2h
+# thin-csi (default)   csi.vsphere.vmware.com         Delete          WaitForFirstConsumer   true                   2d2h
+```
+---
+
+## `RWX` via Azure Files
+
+> Ref:
+> * https://docs.openshift.com/container-platform/4.10/post_installation_configuration/storage-configuration.html#azure-file-definition_post-install-storage-configuration
+> * https://docs.openshift.com/container-platform/4.9/storage/persistent_storage/persistent-storage-azure-file.html
+> * https://docs.microsoft.com/en-us/azure/openshift/howto-create-a-storageclass
+> * https://docs.openshift.com/container-platform/3.11/install_config/persistent_storage/persistent_storage_azure_file.html
 
 ---
 
@@ -809,7 +829,6 @@ Looks like we get this for free with IPI!
 - [X] VMWare CSI for StorageClass
 - [ ] ⭐ Onboard Arc via a `job`
 - [ ] `RWX` StorageClass (Azure File CSI?)
-  * https://docs.microsoft.com/en-us/azure/openshift/howto-create-a-storageclass
 - [ ] Integrate a basic deploy with Azure DevOps Build Agent
   - [ ] Setup Build Agent in vSphere in this repo
   - [ ] `kubectl apply` to OCP
