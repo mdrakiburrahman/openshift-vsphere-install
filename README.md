@@ -784,6 +784,16 @@ We see:
 
 ---
 
+## vSphere CSI
+
+> Ref:
+> * https://docs.openshift.com/container-platform/4.8/storage/container_storage_interface/persistent-storage-csi-vsphere.html
+
+Looks like we get this for free with IPI!
+![Result](_images/16.png)
+
+---
+
 ## TO-DOs
 
 ### Main
@@ -796,9 +806,10 @@ We see:
   - [ ] Add in MetalLB Operator for `LoadBalancer`
   - [ ] ...
   - [ ] MIAA manifests
-- [ ] VMWare CSI for StorageClass
-- [ ] `RWX` StorageClass (Azure CSI?)
+- [X] VMWare CSI for StorageClass
 - [ ] ⭐ Onboard Arc via a `job`
+- [ ] `RWX` StorageClass (Azure File CSI?)
+  * https://docs.microsoft.com/en-us/azure/openshift/howto-create-a-storageclass
 - [ ] Integrate a basic deploy with Azure DevOps Build Agent
   - [ ] Setup Build Agent in vSphere in this repo
   - [ ] `kubectl apply` to OCP
