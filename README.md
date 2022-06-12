@@ -827,19 +827,18 @@ oc patch storageclass thin-csi -p '{"metadata": {"annotations":{"storageclass.ku
   - [ ] ...
   - [ ] MIAA manifests
 - [X] VMWare CSI for StorageClass
-- [ ] ⭐ Onboard Arc via a `job`
 - [ ] `RWX` StorageClass (Azure File CSI?)
-- [ ] Integrate a basic deploy with Azure DevOps Build Agent
-  - [ ] Setup Build Agent in vSphere in this repo
-  - [ ] `kubectl apply` to OCP
+- [ ] ⭐ Onboard Arc via a `job`
+- [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` to OCP
 
 ### Extras
+- [ ] Terraform for all Infra component (vSphere, Azure)
+    - Azure Files, K8s Secret inject for CSI
+    - With Terraform vSphere provider for Windows (DC and Dev - template different)
+    - Include Linux Build Agent for AzDO
+    - Terratest for validation
+    - Build a Modules repo that this main one pulls from as needed
 - [ ] Monitoring integration - Container Insights/Kusto
 - [ ] Some Teams Alerting Webhook (e.g. out of space on `logsdb`)?
-- [ ] Automate VM install 
-    - With Terraform vSphere provider or `govc`
-    - Terratest for validation
-    - Include Build Agent
-    - Build a Modules repo that this main one pulls from as needed
 - [ ] Vault?
 - [ ] Aqua?
