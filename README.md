@@ -723,7 +723,7 @@ oc adm policy add-cluster-role-to-user ldap-group-sync \
   -n ldap-sync
 
 # Create the CronJob
-cat << EOF | oc apply -n ldap-sync -f -
+cat << EOF | oc apply -f -
 apiVersion: batch/v1beta1
 kind: CronJob
 metadata:
@@ -811,6 +811,117 @@ oc patch storageclass thin-csi -p '{"metadata": {"annotations":{"storageclass.ku
 > * https://docs.openshift.com/container-platform/4.9/storage/persistent_storage/persistent-storage-azure-file.html
 > * https://docs.microsoft.com/en-us/azure/openshift/howto-create-a-storageclass
 > * https://docs.openshift.com/container-platform/3.11/install_config/persistent_storage/persistent_storage_azure_file.html
+
+Create `ClusterRole` and add to `ServiceAccount`:
+```bash
+cat << EOF | oc apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:azure-cloud-provider
+rules:
+- apiGroups: ['']
+  resources: ['secrets']
+  verbs:     ['get','create']
+EOF
+# clusterrole.rbac.authorization.k8s.io/system:azure-cloud-provider created
+
+# Bind ClusterRole to ServiceAccount
+oc adm policy add-cluster-role-to-user system:azure-cloud-provider system:serviceaccount:kube-system:persistent-volume-binder
+# clusterrole.rbac.authorization.k8s.io/system:azure-cloud-provider added: "system:serviceaccount:kube-system:persistent-volume-binder"
+```
+
+Create Storage Account and `StorageClass` via Terraform:
+```bash
+# ---------------------
+# ENVIRONMENT VARIABLES
+# For Terraform
+# ---------------------
+# Azure
+export TF_VAR_SPN_CLIENT_ID=$spnClientId
+export TF_VAR_SPN_CLIENT_SECRET=$spnClientSecret
+export TF_VAR_SPN_TENANT_ID=$spnTenantId
+export TF_VAR_SPN_SUBSCRIPTION_ID=$subscriptionId
+export TF_VAR_prefix="ocpvspherearc"
+
+# OCP
+export kube_context="kubectl config view --minify --flatten --context=admin"
+export TF_VAR_host=$(eval "$kube_context" | yq .clusters[0].cluster.server)
+export TF_VAR_client_certificate=$(eval "$kube_context" | yq .users[0].user.client-certificate-data)
+export TF_VAR_client_key=$(eval "$kube_context" | yq .users[0].user.client-key-data)
+export TF_VAR_cluster_ca_certificate=$(eval "$kube_context" | yq .clusters[0].cluster.certificate-authority-data)
+
+# ---------------------
+# DEPLOY TERRAFORM
+# ---------------------
+cd /workspaces/openshift-vsphere-install/terraform
+terraform init
+terraform plan
+terraform apply -auto-approve
+```
+
+Deploy Test Pod with `azure-file`, `RWX` PVC:
+```bash
+cat << EOF | oc apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: azfiletest
+---
+apiVersion: "v1"
+kind: "PersistentVolume"
+metadata:
+  name: "pv0001" 
+  namespace: "azfiletest"
+spec:
+  capacity:
+    storage: "5Gi" 
+  accessModes:
+    - "ReadWriteMany"
+  storageClassName: azure-file
+  azureFile:
+    secretName: azure-file-ocpvspherearcsaef3f4284-csi-driver-secret 
+    secretNamespace: openshift-cluster-csi-drivers
+    shareName: share-1
+    readOnly: false
+---
+apiVersion: "v1"
+kind: "PersistentVolumeClaim"
+metadata:
+  name: "claim1" 
+  namespace: "azfiletest"
+spec:
+  accessModes:
+    - "ReadWriteMany"
+  resources:
+    requests:
+      storage: "5Gi" 
+  storageClassName: azure-file
+  volumeName: "pv0001"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  namespace: azfiletest
+spec:
+  containers:
+  - name: task-pv-container
+    image: nginx
+    ports:
+      - containerPort: 80
+        name: "http-server"
+    volumeMounts:
+    - mountPath: "/data" 
+      name: azure-file-share
+  volumes:
+    - name: azure-file-share
+      persistentVolumeClaim:
+        claimName: claim1 
+EOF
+```
+
+
 
 ---
 
