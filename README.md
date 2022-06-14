@@ -949,7 +949,10 @@ EOF
     - Include Linux Build Agent for AzDO
     - Terratest for validation
     - Build a Modules repo that this main one pulls from as needed
+    - Remote State
+    - Stages to skip
 - [ ] Monitoring integration - Container Insights/Kusto
 - [ ] Some Teams Alerting Webhook (e.g. out of space on `logsdb`)?
 - [ ] Vault?
 - [ ] Aqua?
+- [ ] Diagram
