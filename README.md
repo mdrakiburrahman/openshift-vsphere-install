@@ -943,7 +943,7 @@ EOF
   - [ ] Make all the `scc` stuff for Arc pre-req an Argo repo
   - [ ] Make the onboarder _agnostic_ for AKS and OCP - just `kustomize`
 - [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` to OCP
-- [ ] Terraform for all Infra component (vSphere, Azure)
+- [ ] Terraform for all Infra component (vSphere, Azure) - running from Build Agent
     - Azure Files, K8s Secret inject for CSI
     - With Terraform vSphere provider for Windows (DC and Dev - template different)
     - Include Linux Build Agent for AzDO
