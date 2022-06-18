@@ -933,25 +933,24 @@ EOF
 - [X] LDAP for sign-in
   - [X] Create an AD Group script for Cluster-Admins, add people
   - [X] AuthZ and Group Sync
+- [X] VMWare CSI for StorageClass
+- [ ] `RWX` StorageClass (Azure File CSI?)
 - [ ] ArgoCD AoA - subpath in same repo? Different repo?
   - [ ] Add in MetalLB Operator for `LoadBalancer`
   - [ ] ...
   - [ ] MIAA manifests
-- [X] VMWare CSI for StorageClass
-- [ ] `RWX` StorageClass (Azure File CSI?)
 - [ ] ⭐ Onboard Arc via a `job`
   - [ ] Make all the `scc` stuff for Arc pre-req an Argo repo
   - [ ] Make the onboarder _agnostic_ for AKS and OCP - just `kustomize`
 - [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` to OCP
-
-### Extras
 - [ ] Terraform for all Infra component (vSphere, Azure)
     - Azure Files, K8s Secret inject for CSI
     - With Terraform vSphere provider for Windows (DC and Dev - template different)
     - Include Linux Build Agent for AzDO
     - Terratest for validation
       - SQL MI validation harness of some sort
-    - Build a Modules repo that this main one pulls from as needed
+    - Build a Modules repo that this main one pulls from as needed - have examples and testing
+      * Make the DC single node, modularize into a good image
     - Remote State
     - Stages to skip
     - Leave up to ArgoCD
@@ -959,6 +958,8 @@ EOF
     - Deploy 2 OCPs against a single forest, modularize name and DNS creation
       - Lock down `MachineSets` in ArgoCD to scale based on code commit - conserve IPs (also MetalLB conservation as well)!
       - Change `MachineSet` spec because they are 2 Cores now which sucks
+
+### Extras
 - [ ] Monitoring integration - Container Insights/Kusto
 - [ ] Some Teams Alerting Webhook (e.g. out of space on `logsdb`)?
 - [ ] Vault?
