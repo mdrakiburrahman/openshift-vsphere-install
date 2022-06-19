@@ -175,6 +175,8 @@ Now we can sign-in as Domain Admin `fg\Administrator` to RDP.
 
 ### Install DHCP on the Domain Controller
 
+> * https://adamtheautomator.com/dhcp-scope/
+
 ```powershell
 $dnsServerIP = (Get-NetIPAddress | Where-Object {$_.AddressState -eq "Preferred" -and $_.PrefixLength -eq 24}).IPAddress
 # The 24 filter above is because of our mask we set previously
@@ -187,7 +189,17 @@ $hostname = hostname
 Install-WindowsFeature DHCP -IncludeManagementTools
 
 # Add the DHCP scope to this DC server - from VLAN mapping
-Add-DhcpServerv4Scope -Name 'VLAN-111' -StartRange 10.216.175.5 -Endrange 10.216.175.254 -SubnetMask 255.255.255.0 -State Active
+# Create an IPv4 DHCP Server Scope
+$HashArgs = @{
+    'Name' = 'VLAN-111';                    # Redmond VLAN mapping
+    'Description' = 'Kubernetes CI Lab ';   # This is the human-readable description of the scope
+    'StartRange' = '10.216.175.5';          # Specifies the starting IP address in the scope
+    'EndRange' = '10.216.175.254';          # Specifies the end IP address in the scope
+    'SubnetMask' = '255.255.255.0';         # Specifies the subnet mask of the scope
+    'State' = 'Active';                     # Activates the scope
+    'LeaseDuration' = '0.00:30:00';         # Specifies the length of the lease duration - 30 mins
+}
+Add-DhcpServerv4Scope @HashArgs
 
 # Observe the ScopeID just created
 $scopeID = (Get-DHCPServerV4Scope)[0].ScopeId.IPAddressToString
@@ -206,6 +218,9 @@ Get-DhcpServerV4Reservation -ScopeID $scopeID
 
 # Get 5 next IP Addresses that are free
 Get-DhcpServerv4FreeIPAddress -ScopeID $scopeID -NumAddress 5
+
+# Add Exclusion range for OpenShift Routes
+
 ```
 
 As expected, no leases yet:
@@ -804,6 +819,96 @@ oc patch storageclass thin-csi -p '{"metadata": {"annotations":{"storageclass.ku
 ```
 ---
 
+## New `MachineSet`
+
+> Ref:
+> * https://docs.openshift.com/container-platform/4.10/machine_management/creating_machinesets/creating-machineset-vsphere.html
+> * https://access.redhat.com/documentation/en-us/openshift_container_platform/4.7/html/machine_management/creating-infrastructure-machinesets
+> * https://www.youtube.com/watch?v=3no-WT557ls&ab_channel=OCPdude
+> * https://medium.com/@wintonjkt/machinesets-and-auto-scaling-openshift-cluster-a24c458a200a
+
+### Clean YAML generator
+```bash
+export type='machineset'
+export original_name='arcci-jlzvv-worker'
+export namespace='openshift-machine-api'
+
+oc get $type $original_name  -n $namespace -o=json | jq 'del(.metadata.resourceVersion,.metadata.uid,.metadata.selfLink,.metadata.creationTimestamp,.metadata.annotations,.metadata.generation,.metadata.ownerReferences,.status,.spec.template.spec.lifecycleHooks,.spec.template.spec.metadata,.spec.template.spec.providerSpec.value.metadata)' | yq eval . --prettyPrint
+```
+
+### Apply big MachineSet
+```bash
+# Variables
+export infra_id=$(oc get -o jsonpath='{.status.infrastructureName}{"\n"}' infrastructure cluster)
+export name='worker-big'
+export replicas='3'
+export disk='200'
+export mem='20480'
+export cpu='14'
+export network='DataSvc PG OCP VM Network (VLAN 111)'
+export datacenter='Redmond Datacenter'
+export server='arclab-vc.arclab.local'
+export datastore='ArcLab-NFS-01'
+export resourcepool='ArcLab Workload Cluster'
+
+# Add "--dry-run=client" for dry run
+cat << EOF | oc apply -f -
+apiVersion: machine.openshift.io/v1beta1
+kind: MachineSet
+metadata:
+  labels:
+    machine.openshift.io/cluster-api-cluster: ${infra_id}
+  name: ${infra_id}-${name}
+  namespace: openshift-machine-api
+spec:
+  replicas: ${replicas}
+  selector:
+    matchLabels:
+      machine.openshift.io/cluster-api-cluster: ${infra_id}
+      machine.openshift.io/cluster-api-machineset: ${infra_id}-${name}
+  template:
+    metadata:
+      labels:
+        machine.openshift.io/cluster-api-cluster: ${infra_id}
+        machine.openshift.io/cluster-api-machine-role: worker
+        machine.openshift.io/cluster-api-machine-type: worker
+        machine.openshift.io/cluster-api-machineset: ${infra_id}-${name}
+    spec:
+      providerSpec:
+        value:
+          apiVersion: machine.openshift.io/v1beta1
+          credentialsSecret:
+            name: vsphere-cloud-credentials
+          diskGiB: ${disk}
+          kind: VSphereMachineProviderSpec
+          memoryMiB: ${mem}
+          network:
+            devices:
+              - networkName: ${network}
+          numCPUs: ${cpu}
+          numCoresPerSocket: 2
+          snapshot: ""
+          template: ${infra_id}-rhcos
+          userDataSecret:
+            name: worker-user-data
+          workspace:
+            datacenter: ${datacenter}
+            datastore: ${datastore}
+            folder: /${datacenter}/vm/${infra_id}
+            resourcePool: /${datacenter}/host/${resourcepool}/Resources
+            server: ${server}
+EOF
+# machineset.machine.openshift.io/arcci-jlzvv-worker-big created
+```
+
+We see the VMs getting created:
+![Deploy](_images/17.png)
+
+And we see events per machine:
+![Events](_images/18.png)
+
+---
+
 ## `RWX` via Azure Files
 
 > Ref:
@@ -934,30 +1039,38 @@ EOF
   - [X] Create an AD Group script for Cluster-Admins, add people
   - [X] AuthZ and Group Sync
 - [X] VMWare CSI for StorageClass
-- [ ] `RWX` StorageClass (Azure File CSI?)
-- [ ] ArgoCD AoA - subpath in same repo? Different repo?
-  - [ ] Add in MetalLB Operator for `LoadBalancer`
-  - [ ] ...
-  - [ ] MIAA manifests
 - [ ] ⭐ Onboard Arc via a `job`
   - [ ] Make all the `scc` stuff for Arc pre-req an Argo repo
   - [ ] Make the onboarder _agnostic_ for AKS and OCP - just `kustomize`
+- [ ] `RWX` StorageClass (Azure File CSI?)
+- [ ] ArgoCD AoA - subpath in same repo? Different repo?
+  - [ ] Add in MetalLB Operator for `LoadBalancer`
+  - [ ] Bitnami Sealed Secrets
+  - [ ] ...
+  - [ ] MIAA manifests
 - [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` to OCP
 - [ ] Terraform for all Infra component (vSphere, Azure) - running from Build Agent
-    - Azure Files, K8s Secret inject for CSI
-    - With Terraform vSphere provider for Windows (DC and Dev - template different)
-    - Include Linux Build Agent for AzDO
+    - [ ] Azure Files, K8s Secret inject for CSI
+    - [ ] Include Linux Build Agent for AzDO
+    - [ ] With Terraform vSphere provider for Windows DC (template it, forget the DEV machine)
     - Terratest for validation
       - SQL MI validation harness of some sort
     - Build a Modules repo that this main one pulls from as needed - have examples and testing
       * Make the DC single node, modularize into a good image
     - Remote State
     - Stages to skip
-    - Leave up to ArgoCD
+    - Leave Terraform until up to ArgoCD
       * Convert anything you must need from YAML to HCL
     - Deploy 2 OCPs against a single forest, modularize name and DNS creation
       - Lock down `MachineSets` in ArgoCD to scale based on code commit - conserve IPs (also MetalLB conservation as well)!
-      - Change `MachineSet` spec because they are 2 Cores now which sucks
+      - Create `MachineSets` with bigger sizes
+
+> There should be 2 players managing the Infra at all times - Terraform, and ArgoCD. Terraform hands over control to ArgoCD basically after the K8s and Arc stuff is done.
+
+### Networking!
+- [] Deal with DHCP with extreme dilligence! Ensure the ingress routes for OpenShift cannot be assigned to VMs (Windows or RHOS). This means I should carve out a chunk for multiple OpenShift clusters
+- [] Plan out your IP address ranges - figure out MetalLB if it sucks up IPs - if so, plan out CIDRs
+- [] Can I use another VLAN outside of `VLAN-111`? If so, what steps to perform in the DC?
 
 ### Extras
 - [ ] Monitoring integration - Container Insights/Kusto
