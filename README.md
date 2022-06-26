@@ -1102,9 +1102,9 @@ EOF
   - [X] Create an AD Group script for Cluster-Admins, add people
   - [X] AuthZ and Group Sync
 - [X] VMWare CSI for StorageClass
-- [ ] ⭐ Onboard Arc via a `job`
-  - [ ] Make all the `scc` stuff for Arc pre-req an Argo repo
-  - [ ] Make the onboarder _agnostic_ for AKS and OCP - just `kustomize`
+- [X] Onboard Arc via a `job`
+  - [X] Make all the `scc` stuff for Arc pre-req an Argo repo
+  - [X] Make the onboarder _agnostic_ for AKS and OCP - just `kustomize`
 - [ ] `RWX` StorageClass (Azure File CSI?)
 - [ ] ArgoCD AoA - subpath in same repo? Different repo?
   - [ ] Add in MetalLB Operator for `LoadBalancer`
