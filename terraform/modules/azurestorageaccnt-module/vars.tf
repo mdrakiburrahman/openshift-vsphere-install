@@ -33,3 +33,15 @@ variable "replication" {
   type        = string
   default     = "LRS"
 }
+
+variable "file_share_name" {
+  description = "Name of one file share to create PVC"
+  type        = string
+  default     = "fls-1"
+}
+
+variable "file_share_size" {
+  description = "File share size in GB"
+  type        = number
+  default     = 100
+}

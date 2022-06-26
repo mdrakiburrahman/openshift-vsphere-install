@@ -19,3 +19,9 @@ resource "azurerm_storage_account" "storage" {
 
   tags = var.tags
 }
+
+resource "azurerm_storage_share" "example" {
+  name                 = var.file_share_name
+  storage_account_name = azurerm_storage_account.storage.name
+  quota                = var.file_share_size
+}

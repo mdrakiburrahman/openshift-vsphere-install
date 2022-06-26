@@ -22,8 +22,3 @@ variable "storageaccount_key" {
 # OPTIONAL PARAMETERS
 # These parameters have reasonable defaults.
 # ---------------------------------------------------------------------------------------------------------------------
-# variable "mount_options" {
-#   description = "An array of mount options"
-#   type        = list
-#   default     = ["uid=1500", "gid=1500", "mfsymlinks"]
-# }

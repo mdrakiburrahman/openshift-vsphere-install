@@ -2,7 +2,6 @@ resource "kubernetes_storage_class" "storage" {
   metadata {
     name = var.storageclass_name
   }
-  # mount_options = var.mount_options
   storage_provisioner = "kubernetes.io/azure-file"
   reclaim_policy      = "Delete"
   parameters = {

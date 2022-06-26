@@ -18,7 +18,9 @@ module "storageaccnt" {
   resource_group_location = azurerm_resource_group.ocp_vsphere_rg.location
   resource_group_name     = azurerm_resource_group.ocp_vsphere_rg.name
   tags = var.tags
-  replication             = "LRS" 
+  replication             = "LRS"
+  file_share_name         = var.file_share_name
+  file_share_size         = var.file_share_size
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -31,6 +33,5 @@ module "storageclass" {
   storageclass_name       = "azure-file"
   storageaccount_name     = module.storageaccnt.storage_accnt_name
   storageaccount_key      = module.storageaccnt.storage_accnt_primary_key
-  # mount_options           = ["uid=1500", "gid=1500", "mfsymlinks"]
   
 }

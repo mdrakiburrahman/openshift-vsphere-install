@@ -980,6 +980,9 @@ And we see events per machine:
 > * https://docs.openshift.com/container-platform/3.11/install_config/persistent_storage/persistent_storage_azure_file.html
 > * https://docs.microsoft.com/en-us/azure/openshift/howto-create-a-storageclass
 > * https://blog.cloudtrooper.net/2021/05/25/mounting-azure-files-shares-from-openshift/
+> * https://kubernetes.io/docs/concepts/storage/storage-classes/#azure-file
+> * https://github.com/kubernetes-sigs/azurefile-csi-driver
+> * https://github.com/kubernetes-sigs/azurefile-csi-driver/blob/e38436385ceca271d8d9023d6ff155b4de4c924a/deploy/example/e2e_usage.md
 
 Create `ClusterRole` and add to `ServiceAccount`:
 ```bash
@@ -1000,65 +1003,12 @@ oc adm policy add-cluster-role-to-user system:azure-cloud-provider system:servic
 # clusterrole.rbac.authorization.k8s.io/system:azure-cloud-provider added: "system:serviceaccount:kube-system:persistent-volume-binder"
 ```
 
-> Should do this via Terraform instead
-
-### Manual test
-
-Create Storage Account:
-```bash
-# Login
-az login --service-principal -u $spnClientId -p $spnClientSecret --tenant $spnTenantId
-az account set --subscription $subscriptionId
-
-# Create RG and Storage Account
-AZURE_FILES_RESOURCE_GROUP=ocpvsphererg
-LOCATION=eastus
-
-az group create -l $LOCATION -n $AZURE_FILES_RESOURCE_GROUP
-
-AZURE_STORAGE_ACCOUNT_NAME=ocpazurefilearccijlzvv
-
-az storage account create \
-	--name $AZURE_STORAGE_ACCOUNT_NAME \
-	--resource-group $AZURE_FILES_RESOURCE_GROUP \
-	--kind StorageV2 \
-	--sku Standard_LRS
-
-# Manually create Fileshare named fls-1
-```
-
-Create StorageClass:
-```bash
-cat << EOF  | oc apply -f -
-kind: StorageClass
-apiVersion: storage.k8s.io/v1
-metadata:
-  name: azure-file
-provisioner: kubernetes.io/azure-file
-mountOptions:
-  - dir_mode=0777
-  - file_mode=0777
-  - uid=0
-  - gid=0
-  - mfsymlinks
-  - cache=strict
-  - actimeo=30
-  - noperm
-parameters:
-  secretNamespace: openshift-cluster-csi-drivers
-  storageAccount: $AZURE_STORAGE_ACCOUNT_NAME
-reclaimPolicy: Delete
-volumeBindingMode: Immediate
-EOF
-
-# storageclass.storage.k8s.io/azure-file created
-AZURE_STORAGE_ACCOUNT_KEY='...'
-oc create secret generic azure-file-csi-driver-secret -n openshift-cluster-csi-drivers --from-literal=azurestorageaccountname=$AZURE_STORAGE_ACCOUNT_NAME --from-literal=azurestorageaccountkey=$AZURE_STORAGE_ACCOUNT_KEY
-```
+> Should do this^ via Terraform instead
 
 ### Using Terraform
 
 Create Storage Account and `StorageClass` via Terraform:
+
 ```bash
 # ---------------------
 # ENVIRONMENT VARIABLES
@@ -1070,6 +1020,8 @@ export TF_VAR_SPN_CLIENT_SECRET=$spnClientSecret
 export TF_VAR_SPN_TENANT_ID=$spnTenantId
 export TF_VAR_SPN_SUBSCRIPTION_ID=$subscriptionId
 export TF_VAR_prefix="ocpvspherearc"
+export TF_VAR_file_share_name="fls-1"
+export TF_VAR_file_share_size=75
 
 # OCP
 export kube_context="kubectl config view --minify --flatten --context=admin"
@@ -1085,6 +1037,17 @@ cd /workspaces/openshift-vsphere-install/terraform
 terraform init
 terraform plan
 terraform apply -auto-approve
+
+# Outputs:
+
+# storage_account_name = "ocpvspherearcsa87a8dc4c"
+# storage_class_name = "azure-file"
+# storage_class_secret_name = "azure-file-ocpvspherearcsa87a8dc4c-csi-driver-secret"
+# storage_class_secret_namespace = "openshift-cluster-csi-drivers"
+
+export secretName=$(terraform output --raw storage_class_secret_name)
+export secretNamespace=$(terraform output --raw storage_class_secret_namespace)
+export shareName='fls-1' # Can get TF to spit this out
 ```
 
 ### Test
@@ -1098,35 +1061,35 @@ kind: Namespace
 metadata:
   name: azfiletest
 ---
-apiVersion: "v1"
-kind: "PersistentVolume"
+apiVersion: v1
+kind: PersistentVolume
 metadata:
-  name: "pv0001" 
+  name: pv0001
 spec:
   capacity:
-    storage: "5Gi" 
+    storage: 5Gi
   accessModes:
-    - "ReadWriteMany"
+    - ReadWriteMany
   storageClassName: azure-file
   azureFile:
-    secretName: azure-file-csi-driver-secret
-    secretNamespace: openshift-cluster-csi-drivers
-    shareName: fls-1
+    secretName: $secretName
+    secretNamespace: $secretNamespace
+    shareName: $shareName
     readOnly: false
 ---
-apiVersion: "v1"
-kind: "PersistentVolumeClaim"
+apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
-  name: "claim1" 
-  namespace: "azfiletest"
+  name: claim1
+  namespace: azfiletest
 spec:
   accessModes:
-    - "ReadWriteMany"
+    - ReadWriteMany
   resources:
     requests:
-      storage: "5Gi" 
+      storage: 5Gi
   storageClassName: azure-file
-  volumeName: "pv0001"
+  volumeName: pv0001
 ---
 apiVersion: v1
 kind: Pod
@@ -1158,7 +1121,6 @@ And we see our file in the file share:
 ![Result](_images/21.png)
 
 > The downside here is - we need to create a File Share manually every time, which is silly. I guess we could have pre-created Fileshares and PVs but that's also silly.
-
 
 ---
 
