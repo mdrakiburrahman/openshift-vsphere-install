@@ -802,9 +802,9 @@ We see:
 ## vSphere CSI
 
 > Ref:
-> * https://docs.openshift.com/container-platform/4.8/storage/container_storage_interface/persistent-storage-csi-vsphere.html
-> * https://docs.openshift.com/container-platform/4.9/storage/persistent_storage/persistent-storage-vsphere.html
-> * (`RWO` looks like) https://docs.openshift.com/container-platform/4.9/storage/understanding-persistent-storage.html#pv-access-modes_understanding-persistent-storage
+> * https://docs.openshift.com/container-platform/4.10/storage/container_storage_interface/persistent-storage-csi-vsphere.html
+> * https://docs.openshift.com/container-platform/4.10/storage/persistent_storage/persistent-storage-vsphere.html
+> * (`RWO` looks like) https://docs.openshift.com/container-platform/4.10/storage/understanding-persistent-storage.html#pv-access-modes_understanding-persistent-storage
 
 Looks like we get this for free with IPI!
 ![Result](_images/16.png)
@@ -817,6 +817,69 @@ oc patch storageclass thin-csi -p '{"metadata": {"annotations":{"storageclass.ku
 # thin                 kubernetes.io/vsphere-volume   Delete          Immediate              false                  2d2h
 # thin-csi (default)   csi.vsphere.vmware.com         Delete          WaitForFirstConsumer   true                   2d2h
 ```
+
+Let's test it:
+```bash
+cat << EOF | oc apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vspherecsitest
+---
+apiVersion: "v1"
+kind: PersistentVolumeClaim
+metadata:
+  name: claim1
+  namespace: vspherecsitest
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi 
+  storageClassName: thin-csi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  namespace: vspherecsitest
+spec:
+  containers:
+  - name: task-pv-container
+    image: nginx
+    ports:
+      - containerPort: 80
+        name: "http-server"
+    volumeMounts:
+    - mountPath: "/data" 
+      name: vsphere-csi-vol
+  volumes:
+    - name: vsphere-csi-vol
+      persistentVolumeClaim:
+        claimName: claim1 
+EOF
+
+# Create a couple files in the Pod
+oc exec -it nginx -n vspherecsitest -- /bin/sh
+# 
+touch /data/myfile.txt
+apt-get update && apt-get install -y wget
+wget https://github.com/Microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorks2019.bak -O /data/AdventureWorks2019.bak
+
+# ls -lR
+total 212104 # 212 MB
+-rw-rw-rw-. 1 root root 217178112 Dec  8  2021 AdventureWorks2019.bak
+drwx------. 2 root root     16384 Jun 26 10:57 lost+found
+-rw-rw-rw-. 1 root root         0 Jun 26 10:59 myfile.txt
+```
+
+Before downloading large file:
+![Filestore](_images/19.png)
+
+After:
+![Filestore](_images/20.png)
+
 ---
 
 ## New `MachineSet`
