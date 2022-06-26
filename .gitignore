@@ -38,3 +38,4 @@ openshift-install/binaries/
 
 # Scratchpad
 arc-rbac-manual/*
+fls-test/*

@@ -983,6 +983,13 @@ And we see events per machine:
 > * https://kubernetes.io/docs/concepts/storage/storage-classes/#azure-file
 > * https://github.com/kubernetes-sigs/azurefile-csi-driver
 > * https://github.com/kubernetes-sigs/azurefile-csi-driver/blob/e38436385ceca271d8d9023d6ff155b4de4c924a/deploy/example/e2e_usage.md
+> * https://github.com/kubernetes-sigs/azurefile-csi-driver/blob/d5188bec18eca5e7f305fba8d630b8cb5bf14f81/docs/driver-parameters-intree.md
+> * https://github.com/ezYakaEagle442/aro-pub-storage/blob/master/setup-store-CSI-driver-azure-file.md
+> * https://githubmemory.com/repo/kubernetes-sigs/blob-csi-driver/issues/266
+> * https://faun.pub/dynamic-provisioning-using-azure-files-container-storage-interface-csi-drivers-784034cb3978
+> * https://github.com/ezYakaEagle442/aro-pub-storage/blob/master/setup-store-CSI-driver-azure-file.md
+> * https://access.redhat.com/documentation/en-us/openshift_container_platform/4.10/html/storage/using-container-storage-interface-csi#csi-tp-enable_persistent-storage-csi-azure-file
+> * https://access.redhat.com/documentation/en-us/openshift_container_platform/4.10/html/nodes/working-with-clusters#nodes-cluster-enabling
 
 Create `ClusterRole` and add to `ServiceAccount`:
 ```bash
@@ -1005,7 +1012,9 @@ oc adm policy add-cluster-role-to-user system:azure-cloud-provider system:servic
 
 > Should do this^ via Terraform instead
 
-### Using Terraform
+### Testing Static provisioning
+
+#### Using Terraform
 
 Create Storage Account and `StorageClass` via Terraform:
 
@@ -1122,6 +1131,182 @@ And we see our file in the file share:
 
 > The downside here is - we need to create a File Share manually every time, which is silly. I guess we could have pre-created Fileshares and PVs but that's also silly.
 
+### Testing Dynamic provisioning
+
+#### Attempt 1 - Fail
+
+```bash
+# Secret for cloud.conf
+kubectl create secret generic azure-cloud-provider -n kube-system --from-file=cloud.conf=/workspaces/openshift-vsphere-install/fls-test/cloud.conf
+
+# Secret for Storage Account
+kubectl create secret generic azure-secret --from-literal azurestorageaccountname=... --from-literal azurestorageaccountkey="...w==" --type=Opaque
+
+# Create StorageClass
+cat << EOF  | oc apply -f -
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azurefile-csi
+provisioner: file.csi.azure.com
+allowVolumeExpansion: true
+parameters:
+  provisioner-secret-name: azure-secret
+  provisioner-secret-namespace: default
+  node-stage-secret-name: azure-secret
+  node-stage-secret-namespace: default
+  controller-expand-secret-name: azure-secret
+  controller-expand-secret-namespace: default
+mountOptions:
+  - dir_mode=0777
+  - file_mode=0777
+  - uid=0
+  - gid=0
+  - mfsymlinks
+  - cache=strict  # https://linux.die.net/man/8/mount.cifs
+  - nosharesock  # reduce probability of reconnect race
+  - actimeo=30  # reduce latency for metadata-heavy workload
+EOF
+
+# Deploy an STS that uses it
+cat << EOF | oc apply -f -
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: statefulset-azurefile
+  labels:
+    app: nginx
+spec:
+  podManagementPolicy: Parallel  # default is OrderedReady
+  serviceName: statefulset-azurefile
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+        - name: statefulset-azurefile
+          image: mcr.microsoft.com/oss/nginx/nginx:1.19.5
+          command:
+            - "/bin/bash"
+            - "-c"
+            - set -euo pipefail; while true; do echo $(date) >> /mnt/azurefile/outfile; sleep 1; done
+          volumeMounts:
+            - name: persistent-storage
+              mountPath: /mnt/azurefile
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: nginx
+  volumeClaimTemplates:
+  - metadata:
+      name: persistent-storage
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "azurefile-csi"
+      resources:
+        requests:
+          storage: 1Gi
+EOF
+```
+
+#### Attempt 2: Using CTP on OCP - Fail
+
+```bash
+# Patch to enable Preview features
+oc patch featuregate cluster -p='{ "spec": { "featureSet": "TechPreviewNoUpgrade" } }' --type=merge
+
+oc get featuregate cluster -o yaml
+# apiVersion: config.openshift.io/v1
+# kind: FeatureGate
+# ...
+# spec:
+#   featureSet: TechPreviewNoUpgrade <---
+
+# All nodes will go through new config rotations
+oc get nodes
+# NAME                           STATUS                     ROLES    AGE     VERSION
+# arcci-jlzvv-master-0           Ready                      master   16d     v1.23.5+3afdacb
+# arcci-jlzvv-master-2           Ready,SchedulingDisabled   master   16d     v1.23.5+3afdacb
+# arcci-jlzvv-master-3           Ready                      master   6d17h   v1.23.5+3afdacb
+
+# Validate after it comes back to ready
+oc debug node/arcci-jlzvv-master-2
+chroot /host
+cat /etc/kubernetes/kubelet.conf
+# "featureGates": {
+#   "APIPriorityAndFairness": true,
+#   "BuildCSIVolumes": true,
+#   "CSIDriverAzureDisk": true,
+#   "CSIDriverAzureFile": true,           <---
+#   "CSIDriverSharedResource": true,
+
+# Looking good!
+
+# Now, if we immediately check the Cluster Operator:
+oc get co storage
+# NAME      VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
+# storage   4.10.16   True        True          False      5m2s    VSphereCSIDriverOperatorCRProgressing: VMwareVSphereDriverControllerServiceControllerProgressing: Waiting for Deployment to deploy pods...
+```
+
+We want, according to [this](https://access.redhat.com/documentation/en-us/openshift_container_platform/4.10/html/storage/using-container-storage-interface-csi#csi-tp-enable_persistent-storage-csi-azure-file):
+* AVAILABLE should be "True".
+* PROGRESSING should be "False".
+* DEGRADED should be "False".
+
+Waiting a few more minutes till nodes are done rotating:
+
+```bash
+NAME      VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
+storage   4.10.16   True        False         False      42s
+```
+
+And let's validate our pods in the CSI namespace:
+```bash
+oc get pod -n openshift-cluster-csi-drivers
+
+# NAME                                                    READY   STATUS    RESTARTS        AGE
+# shared-resource-csi-driver-node-7dnbb                   2/2     Running   2               8m27s
+# shared-resource-csi-driver-node-96tn6                   2/2     Running   0               8m27s
+# shared-resource-csi-driver-node-nxf9d                   2/2     Running   2               8m27s
+# shared-resource-csi-driver-node-pkxrp                   2/2     Running   2               8m27s
+# shared-resource-csi-driver-node-vz982                   2/2     Running   0               8m27s
+# shared-resource-csi-driver-node-xb4qb                   2/2     Running   0               8m27s
+# shared-resource-csi-driver-operator-5cf4d4d975-xncmz    1/1     Running   0               108s
+...
+# vmware-vsphere-csi-driver-controller-79c95cfb55-gfh2p   9/9     Running   0               5m16s
+# vmware-vsphere-csi-driver-controller-79c95cfb55-lcxv5   9/9     Running   0               103s
+# vmware-vsphere-csi-driver-node-7d5bc                    3/3     Running   1 (16d ago)     16d
+# vmware-vsphere-csi-driver-node-8dz2t                    3/3     Running   1 (6d16h ago)   6d16h
+...
+# vmware-vsphere-csi-driver-node-p9rx7                    3/3     Running   5 (4m15s ago)   6d16h
+# vmware-vsphere-csi-driver-operator-7869c4cb55-pf5rr     1/1     Running   0               5m14s
+# vmware-vsphere-csi-driver-webhook-745d8fb886-lxms6      1/1     Running   0               108s
+
+# No Azure File CSI Pods^
+
+# No storage classes:
+oc get storageclass
+# NAME                 PROVISIONER                    RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+# thin                 kubernetes.io/vsphere-volume   Delete          Immediate              false                  16d
+# thin-csi (default)   csi.vsphere.vmware.com         Delete          WaitForFirstConsumer   true                   16d
+```
+
+Ok _now_ let's install the `StorageClass` as per Andy's instructions.
+
+Nope, no luck.
+
+```bash
+oc delete pod -l=app=shared-resource-csi-driver-node -n openshift-cluster-csi-drivers --grace-period=0 --force
+oc delete --all pod -n openshift-cluster-storage-operator --grace-period=0 --force
+```
+
+> Nothing, in fact this also messed up our static provisioning capabilities above.
+
 ---
 
 ## TO-DOs
@@ -1136,7 +1321,7 @@ And we see our file in the file share:
 - [X] Onboard Arc via a `job`
   - [X] Make all the `scc` stuff for Arc pre-req an Argo repo
   - [X] Make the onboarder _agnostic_ for AKS and OCP - just `kustomize`
-- [ ] `RWX` StorageClass (Azure File CSI?)
+- [X] `RWX` StorageClass (Azure File CSI?) - **Static Only on OpenShift**
 - [ ] ArgoCD AoA - subpath in same repo? Different repo?
   - [ ] Add in MetalLB Operator for `LoadBalancer`
   - [ ] Bitnami Sealed Secrets
@@ -1144,8 +1329,8 @@ And we see our file in the file share:
   - [ ] MIAA manifests
 - [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` to OCP
 - [ ] Terraform for all Infra component (vSphere, Azure) - running from Build Agent
-    - [ ] Azure Files, K8s Secret inject for CSI
     - [ ] Include Linux Build Agent for AzDO
+    - [ ] Azure Files, K8s Secret inject for CSI
     - [ ] With Terraform vSphere provider for Windows DC (template it, forget the DEV machine)
     - Terratest for validation
       - SQL MI validation harness of some sort
