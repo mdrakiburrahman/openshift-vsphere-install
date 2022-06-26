@@ -306,6 +306,7 @@ We see:
 ---
 # `devcontainer` prep
 
+> This has been added to the container bootup
 ```bash
 # = = = = = = = = = = = = = = = = = = = 
 # DNS Hack for this VSCode Devcontainer
@@ -1309,6 +1310,83 @@ oc delete --all pod -n openshift-cluster-storage-operator --grace-period=0 --for
 
 ---
 
+## ArgoCD
+
+```bash
+# Argo namespace
+kubectl create namespace argocd
+
+# Apply massive YAML in Argo Namespace
+kubectl apply -n argocd -f /workspaces/openshift-vsphere-install/ArgoCD/install/argo.yaml
+
+# Create:
+# - Route to access
+# - App of Apps
+cat << EOF | oc apply -f -
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: argocd-route
+  namespace: argocd
+spec:
+  host: argocd.apps.arcci.fg.contoso.com
+  port:
+    targetPort: http
+  tls:
+    termination: passthrough 
+    insecureEdgeTerminationPolicy: None 
+  to:
+    kind: Service
+    name: argocd-server
+    weight: 100
+  wildcardPolicy: None
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-app-of-apps
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/mdrakiburrahman/openshift-app-of-apps.git'
+    path: app-of-apps/kustomize/overlays/arcci
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - Validate=false
+      - CreateNamespace=false
+EOF
+# route.route.openshift.io/argocd-route unchanged
+# application.argoproj.io/argocd-app-of-apps created
+```
+
+ArgoCD is now accessible:
+![Argo Route](_images/22.png)
+
+```bash
+# Get secret
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
+# jHZGqnezJheE2z7Q
+```
+
+We see our App of apps:
+![Argo Route](_images/23.png)
+
+With 3 node `MachineSet`:
+![Argo Route](_images/24.png)
+
+And if we do a git commit [like this](https://github.com/mdrakiburrahman/openshift-app-of-apps/commit/50135742eadc51e992379fbb85a56f2967ef4b2a) - it scales up/down - cool!
+![Argo Route](_images/25.png)
+
+---
+
 ## TO-DOs
 
 ### Main
@@ -1322,10 +1400,11 @@ oc delete --all pod -n openshift-cluster-storage-operator --grace-period=0 --for
   - [X] Make all the `scc` stuff for Arc pre-req an Argo repo
   - [X] Make the onboarder _agnostic_ for AKS and OCP - just `kustomize`
 - [X] `RWX` StorageClass (Azure File CSI?) - **Static Only on OpenShift**
-- [ ] ArgoCD AoA - subpath in same repo? Different repo?
+- [X] ArgoCD AoA - subpath in same repo? Different repo?
+  - [X] MachineSet
   - [ ] Add in MetalLB Operator for `LoadBalancer`
   - [ ] Bitnami Sealed Secrets
-  - [ ] ...
+  - [ ] Job onboarder test
   - [ ] MIAA manifests
 - [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` to OCP
 - [ ] Terraform for all Infra component (vSphere, Azure) - running from Build Agent
@@ -1346,7 +1425,7 @@ oc delete --all pod -n openshift-cluster-storage-operator --grace-period=0 --for
 
 > There should be 2 players managing the Infra at all times - Terraform, and ArgoCD. Terraform hands over control to ArgoCD basically after the K8s and Arc stuff is done.
 
-### Networking!
+### Networking
 - [] Deal with DHCP with extreme dilligence! Ensure the ingress routes for OpenShift cannot be assigned to VMs (Windows or RHOS). This means I should carve out a chunk for multiple OpenShift clusters
 - [] Plan out your IP address ranges - figure out MetalLB if it sucks up IPs - if so, plan out CIDRs
 - [] Can I use another VLAN outside of `VLAN-111`? If so, what steps to perform in the DC?

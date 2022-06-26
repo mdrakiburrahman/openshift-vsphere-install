@@ -1,6 +1,7 @@
 {
 	"name": "vSphere Container",
 	"dockerFile": "Dockerfile",
+	"overrideCommand": false,
 
     // Mount to Docker
     "mounts": [
