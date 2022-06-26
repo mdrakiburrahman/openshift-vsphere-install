@@ -977,8 +977,9 @@ And we see events per machine:
 > Ref:
 > * https://docs.openshift.com/container-platform/4.10/post_installation_configuration/storage-configuration.html#azure-file-definition_post-install-storage-configuration
 > * https://docs.openshift.com/container-platform/4.9/storage/persistent_storage/persistent-storage-azure-file.html
-> * https://docs.microsoft.com/en-us/azure/openshift/howto-create-a-storageclass
 > * https://docs.openshift.com/container-platform/3.11/install_config/persistent_storage/persistent_storage_azure_file.html
+> * https://docs.microsoft.com/en-us/azure/openshift/howto-create-a-storageclass
+> * https://blog.cloudtrooper.net/2021/05/25/mounting-azure-files-shares-from-openshift/
 
 Create `ClusterRole` and add to `ServiceAccount`:
 ```bash
@@ -998,6 +999,64 @@ EOF
 oc adm policy add-cluster-role-to-user system:azure-cloud-provider system:serviceaccount:kube-system:persistent-volume-binder
 # clusterrole.rbac.authorization.k8s.io/system:azure-cloud-provider added: "system:serviceaccount:kube-system:persistent-volume-binder"
 ```
+
+> Should do this via Terraform instead
+
+### Manual test
+
+Create Storage Account:
+```bash
+# Login
+az login --service-principal -u $spnClientId -p $spnClientSecret --tenant $spnTenantId
+az account set --subscription $subscriptionId
+
+# Create RG and Storage Account
+AZURE_FILES_RESOURCE_GROUP=ocpvsphererg
+LOCATION=eastus
+
+az group create -l $LOCATION -n $AZURE_FILES_RESOURCE_GROUP
+
+AZURE_STORAGE_ACCOUNT_NAME=ocpazurefilearccijlzvv
+
+az storage account create \
+	--name $AZURE_STORAGE_ACCOUNT_NAME \
+	--resource-group $AZURE_FILES_RESOURCE_GROUP \
+	--kind StorageV2 \
+	--sku Standard_LRS
+
+# Manually create Fileshare named fls-1
+```
+
+Create StorageClass:
+```bash
+cat << EOF  | oc apply -f -
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: azure-file
+provisioner: kubernetes.io/azure-file
+mountOptions:
+  - dir_mode=0777
+  - file_mode=0777
+  - uid=0
+  - gid=0
+  - mfsymlinks
+  - cache=strict
+  - actimeo=30
+  - noperm
+parameters:
+  secretNamespace: openshift-cluster-csi-drivers
+  storageAccount: $AZURE_STORAGE_ACCOUNT_NAME
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+EOF
+
+# storageclass.storage.k8s.io/azure-file created
+AZURE_STORAGE_ACCOUNT_KEY='...'
+oc create secret generic azure-file-csi-driver-secret -n openshift-cluster-csi-drivers --from-literal=azurestorageaccountname=$AZURE_STORAGE_ACCOUNT_NAME --from-literal=azurestorageaccountkey=$AZURE_STORAGE_ACCOUNT_KEY
+```
+
+### Using Terraform
 
 Create Storage Account and `StorageClass` via Terraform:
 ```bash
@@ -1028,7 +1087,10 @@ terraform plan
 terraform apply -auto-approve
 ```
 
+### Test
+
 Deploy Test Pod with `azure-file`, `RWX` PVC:
+
 ```bash
 cat << EOF | oc apply -f -
 apiVersion: v1
@@ -1040,7 +1102,6 @@ apiVersion: "v1"
 kind: "PersistentVolume"
 metadata:
   name: "pv0001" 
-  namespace: "azfiletest"
 spec:
   capacity:
     storage: "5Gi" 
@@ -1048,9 +1109,9 @@ spec:
     - "ReadWriteMany"
   storageClassName: azure-file
   azureFile:
-    secretName: azure-file-ocpvspherearcsaef3f4284-csi-driver-secret 
+    secretName: azure-file-csi-driver-secret
     secretNamespace: openshift-cluster-csi-drivers
-    shareName: share-1
+    shareName: fls-1
     readOnly: false
 ---
 apiVersion: "v1"
@@ -1087,8 +1148,16 @@ spec:
       persistentVolumeClaim:
         claimName: claim1 
 EOF
+
+oc exec -it nginx -n azfiletest -- /bin/sh
+# 
+touch /data/myfile.txt
 ```
 
+And we see our file in the file share:
+![Result](_images/21.png)
+
+> The downside here is - we need to create a File Share manually every time, which is silly. I guess we could have pre-created Fileshares and PVs but that's also silly.
 
 
 ---

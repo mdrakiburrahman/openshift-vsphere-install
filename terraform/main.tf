@@ -31,6 +31,6 @@ module "storageclass" {
   storageclass_name       = "azure-file"
   storageaccount_name     = module.storageaccnt.storage_accnt_name
   storageaccount_key      = module.storageaccnt.storage_accnt_primary_key
-  mount_options           = ["uid=1500", "gid=1500", "mfsymlinks"]
+  # mount_options           = ["uid=1500", "gid=1500", "mfsymlinks"]
   
 }
