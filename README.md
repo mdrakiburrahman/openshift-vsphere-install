@@ -191,7 +191,7 @@ Install-WindowsFeature DHCP -IncludeManagementTools
 # Add the DHCP scope to this DC server - from VLAN mapping
 # Create an IPv4 DHCP Server Scope
 $HashArgs = @{
-    'Name' = 'VLAN-111';                    # Redmond VLAN mapping
+    'Name' = 'VLAN-111';                    # Redmond VLAN 111 mapping
     'Description' = 'Kubernetes CI Lab ';   # This is the human-readable description of the scope
     'StartRange' = '10.216.175.5';          # Specifies the starting IP address in the scope
     'EndRange' = '10.216.175.254';          # Specifies the end IP address in the scope
@@ -219,12 +219,23 @@ Get-DhcpServerV4Reservation -ScopeID $scopeID
 # Get 5 next IP Addresses that are free
 Get-DhcpServerv4FreeIPAddress -ScopeID $scopeID -NumAddress 5
 
-# Add Exclusion range for OpenShift Routes
+# Add Exclusion ranges
 
+## OpenShift Routes
+Add-DhcpServerv4ExclusionRange -ScopeId 10.216.175.0 -StartRange 10.216.175.6 -EndRange 10.216.175.10
+
+## MetalLB
+Add-DhcpServerv4ExclusionRange -ScopeId 10.216.175.0 -StartRange 10.216.175.48 -EndRange 10.216.175.79
 ```
 
-As expected, no leases yet:
+When we started - as expected, no leases yet:
 ![Result](_images/2.png)
+
+Exclusion ranges:
+![Exclusions](_images/26.png)
+
+After OpenShift install (post following these steps with `MachineSets`) - all the leases:
+![Leases](_images/27.png)
 
 ### Configure DNS forwarder so we can browse the web
 
@@ -1312,6 +1323,8 @@ oc delete --all pod -n openshift-cluster-storage-operator --grace-period=0 --for
 
 ## ArgoCD
 
+> * https://computingforgeeks.com/how-to-install-argocd-on-openshift-cluster/
+
 ```bash
 # Argo namespace
 kubectl create namespace argocd
@@ -1372,8 +1385,17 @@ ArgoCD is now accessible:
 
 ```bash
 # Get secret
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
-# jHZGqnezJheE2z7Q
+export argopass=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo )
+
+# Access via CLI
+argocd login argocd.apps.arcci.fg.contoso.com --username admin --password $argopass --insecure
+
+# List apps
+argocd app list
+# NAME                CLUSTER                         NAMESPACE              PROJECT  STATUS  HEALTH   SYNCPOLICY  CONDITIONS  REPO                                                          PATH                                  TARGET
+# argocd-app-of-apps  https://kubernetes.default.svc  argocd                 default  Synced  Healthy  Auto-Prune  <none>      https://github.com/mdrakiburrahman/openshift-app-of-apps.git  app-of-apps/kustomize/overlays/arcci  HEAD
+# machineset          https://kubernetes.default.svc  openshift-machine-api  default  Synced  Healthy  Auto-Prune  <none>      https://github.com/mdrakiburrahman/openshift-app-of-apps.git  machineset/kustomize/overlays/arcci   HEAD
+# ...
 ```
 
 We see our App of apps:
@@ -1385,6 +1407,70 @@ With 3 node `MachineSet`:
 And if we do a git commit [like this](https://github.com/mdrakiburrahman/openshift-app-of-apps/commit/50135742eadc51e992379fbb85a56f2967ef4b2a) - it scales up/down - cool!
 ![Argo Route](_images/25.png)
 
+---
+
+## MetalLB
+
+> * https://docs.openshift.com/container-platform/4.10/networking/metallb/metallb-operator-install.html
+> * https://docs.openshift.com/container-platform/4.10/networking/metallb/metallb-configure-address-pools.html#metallb-configure-address-pools
+> * https://docs.openshift.com/container-platform/4.10/networking/metallb/metallb-configure-services.html#metallb-configure-services
+> * https://github.com/openshift/metallb-operator
+
+- [X] Need to add DHCP exception to DC for say, 30 IPs - `10.216.175.48-10.216.175.79` (added above)
+
+Added MetalLB [here](https://github.com/mdrakiburrahman/openshift-app-of-apps/tree/main/metallb/kustomize):
+
+![MetalLB](_images/28.png)
+
+Let's try to create a test `LoadBalancer` Service, delete it, then recreate to see if we get the same IP back:
+
+```bash
+# Create ns
+oc create ns lb-test
+
+# Deployment with Service
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  namespace: lb-test
+  labels:
+    app.kubernetes.io/name: proxy
+spec:
+  containers:
+  - name: nginx
+    image: nginx:stable
+    ports:
+      - containerPort: 80
+        name: http-web-svc 
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  namespace: lb-test
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: proxy
+  ports:
+  - name: name-of-service-port
+    protocol: TCP
+    port: 80
+    targetPort: http-web-svc
+EOF
+
+oc get svc -n lb-test
+
+# NAME            TYPE           CLUSTER-IP       EXTERNAL-IP     PORT(S)        AGE
+# nginx-service   LoadBalancer   172.30.108.211   10.216.175.48   80:30715/TCP   6s
+```
+
+So that's the first IP in our `AddressPool`:
+![MetalLB](_images/29.png)
+
+> Validated that deleting the service releases the IPs once again.
 ---
 
 ## TO-DOs
@@ -1402,7 +1488,7 @@ And if we do a git commit [like this](https://github.com/mdrakiburrahman/openshi
 - [X] `RWX` StorageClass (Azure File CSI?) - **Static Only on OpenShift**
 - [X] ArgoCD AoA - subpath in same repo? Different repo?
   - [X] MachineSet
-  - [ ] Add in MetalLB Operator for `LoadBalancer`
+  - [X] Add in MetalLB Operator for `LoadBalancer`
   - [ ] Bitnami Sealed Secrets
   - [ ] Job onboarder test
   - [ ] MIAA manifests
