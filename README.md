@@ -1383,6 +1383,7 @@ EOF
 ArgoCD is now accessible:
 ![Argo Route](_images/22.png)
 
+Login to `argocd` CLI:
 ```bash
 # Get secret
 export argopass=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo )
@@ -1529,6 +1530,50 @@ kubectl get secret mysecret -n sample \
 
 ---
 
+## Arc Data Services onboarding with a `Job`
+
+> * https://github.com/kubernetes-sigs/kustomize/issues/2962
+> * https://faun.pub/sealing-secrets-with-kustomize-51d1b79105d8
+
+Working setup - [here](https://github.com/mdrakiburrahman/openshift-app-of-apps/blob/main/app-of-apps/kustomize/overlays/arcci/kube-arc-data-services-installer-job-patch.yaml):
+
+So Kubernetes is bad at generating `job` name it seems: [See Issue](https://github.com/kubernetes-sigs/kustomize/issues/641)
+
+Argo has a great solution using Hooks: [See](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_hooks/)
+
+Since our `job` is Idempotent, we can rerun as many times as we like!
+
+> The only trick will be pulling logs out, which we can solve using Container Insights or Prometheus I think. The good news is, if the `job` fails I think Argo still keeps it around so that's good - if we hit an error code we'll get our logs out.
+
+### Onboard
+
+Onboard:
+![Arc](_images/30.png)
+
+In Azure:
+![Arc](_images/31.png)
+
+### Offboard
+
+And we change our `ConfigMap` in a [git commit](https://github.com/mdrakiburrahman/openshift-app-of-apps/commit/259d09a3062d628bc93c4a3ff4ee805b8b19fdb3) - which auto forces a sync!
+![Arc](_images/32.png)
+
+And the `job` auto deletes:
+![Arc](_images/33.png)
+
+### Onboard
+
+And we change our `ConfigMap` in a [git commit](https://github.com/mdrakiburrahman/openshift-app-of-apps/commit/31a478e944936458dd914ce0b9dbd7d486718786):
+
+We can force a sync via `argocd app sync kube-arc-data-services-installer-job`:
+
+![Arc](_images/34.png)
+
+And after Arc is onboarded we see:
+![Arc](_images/35.png)
+
+---
+
 ## TO-DOs
 
 ### Main
@@ -1546,9 +1591,10 @@ kubectl get secret mysecret -n sample \
   - [X] MachineSet
   - [X] Add in MetalLB Operator for `LoadBalancer`
   - [X] Bitnami Sealed Secrets
-  - [ ] Job onboarder test
-  - [ ] MIAA manifests
-- [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` to OCP
+  - [X] Job onboarder test
+  - [ ] MIAA manifests as another App in the last wave
+- [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` MIAA to OCP
+- [ ] Rerun through jobs, ensure everything is reproducible
 - [ ] Terraform for all Infra component (vSphere, Azure) - running from Build Agent
     - [ ] Include Linux Build Agent for AzDO
     - [ ] Azure Files, K8s Secret inject for CSI
@@ -1568,13 +1614,13 @@ kubectl get secret mysecret -n sample \
 > There should be 2 players managing the Infra at all times - Terraform, and ArgoCD. Terraform hands over control to ArgoCD basically after the K8s and Arc stuff is done.
 
 ### Networking
-- [] Deal with DHCP with extreme dilligence! Ensure the ingress routes for OpenShift cannot be assigned to VMs (Windows or RHOS). This means I should carve out a chunk for multiple OpenShift clusters
-- [] Plan out your IP address ranges - figure out MetalLB if it sucks up IPs - if so, plan out CIDRs
+- [X] Deal with DHCP with extreme dilligence! Ensure the ingress routes for OpenShift cannot be assigned to VMs (Windows or RHOS). This means I should carve out a chunk for multiple OpenShift clusters
+- [X] Plan out your IP address ranges - figure out MetalLB if it sucks up IPs - if so, plan out CIDRs
 - [] Can I use another VLAN outside of `VLAN-111`? If so, what steps to perform in the DC?
 
 ### Extras
 - [ ] Monitoring integration - Container Insights/Kusto
 - [ ] Some Teams Alerting Webhook (e.g. out of space on `logsdb`)?
-- [ ] Vault?
+- [X] ~~Vault~~ (Bitnami instead)
 - [ ] Aqua?
 - [ ] Diagram
