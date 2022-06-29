@@ -256,10 +256,13 @@ Add-DnsServerConditionalForwarderZone -Name "arclab.local" -MasterServers "10.21
 
 ## `OCPLab-DEV-1`
 
-Use the `VM Customization Specifications` to
+Use the vSphere native feature `VM Customization Specifications` to
 * Use the vSphere machines name as the hostname
+* Generate a new SID
 * Auto domain join to `fg.contoso.com`
 * Since DHCP is configured above, should get an IP address automatically
+
+![VM Customization Specifications](_images/43.png)
 
 ![Result](_images/5.png)
 
@@ -268,6 +271,7 @@ Use the `VM Customization Specifications` to
 The VM will go through it's reboot cycles to join the domain etc.
 
 Post boot in `OCPLab-DEV1`:
+
 ![Result](_images/7.png)
 
 ![Result](_images/8.png)
@@ -1797,6 +1801,214 @@ And we see that the Controller has been managing the AD Account Creation/Keytab 
 
 ---
 
+## Integrate OCP with Azure DevOps
+
+### Create Build Agent in vSphere
+
+We have an Ubuntu 20.04 vanilla template image, and a `VM Customization Specifications` that onboards the Machine to our `OCPLab-DC1` DNS Server/DHCP:
+
+![Vanila 20.04](_images/44.png)
+
+![VM Custom Spec](_images/45.png)
+
+We create a VM from this Template called `OCPLab-AGENT1`:
+
+![Agent VM deploy](_images/46.png)
+
+The VM will come up, and automatically contact the DHCP server to grab the next available IP:
+
+![Agent VM IP](_images/47.png)
+
+We connect to the VM with PuTTY (for pasting commands), and validate DNS resolution:
+
+![Agent VM DNS](_images/48.png)
+
+### Connect build agent to Azure DevOps Org
+
+We use a demo Azure DevOps Org and create a new Agent Pool:
+
+![Create Agent VM](_images/49.png)
+
+We create a PAT token with the following permissions:
+
+![Create PAT](_images/50.png)
+
+And use the following script to onboard the machine as a Self Hosted runner:
+
+```bash
+# Localize
+export ORG="https://dev.azure.com/ohdevopsraki"
+export TOKEN="h45..."
+export POOL="vsphere_lab"
+export SUDO_PASSWORD="acntorPRESTO!"
+
+# Install pre-reqs
+echo $SUDO_PASSWORD | sudo -S apt install jq  -y
+
+# Source the helpers for use with the script
+wget https://gist.githubusercontent.com/mdrakiburrahman/118479e70112a2845fd6ac3592682048/raw/ada70f966cca665d9006d90605b6e8fe7fb5dbb0/install.sh
+source install.sh
+
+# Download and untar VSTS Agent
+VSTS_ASSETS_URL=$(curl -s https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest | jq -r '.assets[].browser_download_url')
+download_with_retries $VSTS_ASSETS_URL "/tmp"
+URL=$(cat /tmp/assets.json | jq -r '.[] | select((.name | startswith("vsts-agent-linux")) and .platform == "linux-x64") | .downloadUrl')
+download_with_retries $URL "/tmp"
+mkdir agent
+tar -xzf /tmp/vsts-agent-linux-*.tar.gz --directory agent
+
+# Install in unattended mode
+agent/config.sh --unattended --acceptteeeula --url $ORG --auth PAT --token $TOKEN --pool $POOL --agent $HOSTNAME
+
+# Run agent in systemd mode so we don't mess around with interactive prompts, this svc.sh file is generated after the install above
+cd agent
+sudo ./svc.sh install
+echo $SUDO_PASSWORD | sudo -S ./svc.sh start
+```
+
+![Build Agent up](_images/51.png)
+
+![Build Agent up](_images/52.png)
+
+### Create K8s Service Account for AzDO pipeline
+
+```bash
+# Create a new service account
+kubectl create sa azdo-sa -n default
+# serviceaccount/azdo-sa created
+
+# Assign service account cluster-admin for demo
+kubectl create clusterrolebinding azdo-cluster-admin-binding --clusterrole=cluster-admin --serviceaccount=default:azdo-sa
+# clusterrolebinding.rbac.authorization.k8s.io/azdo-cluster-admin-binding created
+
+# Get the first secret, which is the API Server secret for OpenShift
+# https://cookbook.openshift.org/accessing-an-openshift-cluster/how-can-i-create-a-service-account-for-scripted-access.html
+export SECRET=$(kubectl get serviceAccounts azdo-sa -n default -o=jsonpath={.secrets[1].name})
+
+kubectl get secret ${SECRET} -n default -o json > azdo-sa.json
+# Ensure the secret is of type "type": "kubernetes.io/service-account-token" and not the OpenShift Docker one! Can improve the query above to validate this rather than hardcoding 0 or 1
+```
+
+![K8s Secret](_images/53.png)
+
+Create a Service Connection in Azure DevOps for K8s with the APIServer URL as `https://api.arcci.fg.contoso.com:6443`:
+
+```bash
+kubectl config view --minify -o jsonpath={.clusters[0].cluster.server}
+# https://api.arcci.fg.contoso.com:6443
+```
+
+![Azure DevOps connection](_images/54.png)
+
+### Deploy a SQL MI from Azure DevOps
+
+We create a new repo, with the following SQL MI manifest `sql-gp-ad-2.yaml`:
+
+```yaml
+apiVersion: v1
+data:
+  password: YWNudG9yUFJFU1RPIQ==
+  username: Ym9vcg==
+kind: Secret
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  name: sql-gp-ad-2-secret
+  namespace: azure-arc-data
+type: Opaque
+---
+apiVersion: sql.arcdata.microsoft.com/v5
+kind: SqlManagedInstance
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  name: sql-gp-ad-2
+  namespace: azure-arc-data
+spec:
+  backup:
+    retentionPeriodInDays: 7
+  dev: true
+  forceHA: "true"
+  licenseType: LicenseIncluded
+  replicas: 1
+  scheduling:
+    default:
+      resources:
+        limits:
+          cpu: "2"
+          memory: 4Gi
+        requests:
+          cpu: "1"
+          memory: 2Gi
+  security:
+    activeDirectory:
+      accountName: sql-gp-ad-2-account
+      connector:
+        name: adarc
+    adminLoginSecret: sql-gp-ad-2-secret
+  services:
+    primary:
+      dnsName: sql-gp-ad-2.fg.contoso.com
+      port: 31433
+      type: LoadBalancer
+  settings:
+    network:
+      forceencryption: "0"
+      tlsprotocols: "1.2"
+    sqlagent:
+      enabled: "true"
+  storage:
+    data:
+      volumes:
+      - className: thin-csi
+        size: 5Gi
+    datalogs:
+      volumes:
+      - className: thin-csi
+        size: 5Gi
+    logs:
+      volumes:
+      - className: thin-csi
+        size: 5Gi
+  tier: GeneralPurpose
+```
+
+And a simple Release Pipeline that runs on our self-hosted agent `deploy.yaml`:
+```yaml
+pool: vsphere_lab
+
+steps:
+- script: echo "Deploying to OpenShift from manifest on Azure"
+  displayName: 'Start deployment'
+
+- task: KubernetesManifest@0
+  inputs:
+    action: 'deploy'
+    kubernetesServiceConnection: 'vSphere OpenShift'
+    namespace: 'azure-arc-data'
+    manifests: 'kubernetes/sql-gp-ad-2.yaml'
+```
+
+![Azure DevOps connection](_images/55.png)
+
+Create a new Release Pipeline from the above YAML and run it:
+
+![Azure DevOps apply](_images/56.png)
+
+Note that the manifest task auto annotates the deployment:
+
+```bash
+/home/boor/agent/_work/_tool/kubectl/1.24.2/x64/kubectl annotate -f /home/boor/agent/_work/_temp/Secret_sql-gp-ad-2-secret_1656545337157,/home/boor/agent/_work/_temp/SqlManagedInstance_sql-gp-ad-2_1656545337157 azure-pipelines/run=20220629.2 azure-pipelines/pipeline="testopenshift" azure-pipelines/pipelineId="14" azure-pipelines/jobName="Job" azure-pipelines/runuri=https://dev.azure.com/ohdevopsraki/devopsoh15219/_build/results?buildId=117 azure-pipelines/project=devopsoh15219 azure-pipelines/org=https://dev.azure.com/ohdevopsraki/ --overwrite --namespace azure-arc-data
+```
+
+And we see the Pods coming up, and the Controller doing the deploy:
+
+![Azure DevOps apply](_images/57.png)
+
+> This is definitely not as elegant as the GitOps route but should work for quick scripted validations
+
+---
+
 ## TO-DOs
 
 ### Main
@@ -1816,8 +2028,8 @@ And we see that the Controller has been managing the AD Account Creation/Keytab 
   - [X] Bitnami Sealed Secrets
   - [X] Job onboarder test
   - [X] MIAA manifests as another App in the last wave
-- [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` MIAA to OCP
-- [ ] Rerun through jobs, ensure everything is reproducible
+- [X] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` MIAA to OCP
+- [ ] Rerun through steps, ensure everything is reproducible, specially the OpenShift deploy and ArgoCD waves
 - [ ] Terraform for all Infra component (vSphere, Azure) - running from Build Agent
     - [ ] Include Linux Build Agent for AzDO
     - [ ] Azure Files, K8s Secret inject for CSI
