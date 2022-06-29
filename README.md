@@ -1548,9 +1548,11 @@ Since our `job` is Idempotent, we can rerun as many times as we like!
 ### Onboard
 
 Onboard:
+
 ![Arc](_images/30.png)
 
 In Azure:
+
 ![Arc](_images/31.png)
 
 ### Offboard
@@ -1570,7 +1572,175 @@ We can force a sync via `argocd app sync kube-arc-data-services-installer-job`:
 ![Arc](_images/34.png)
 
 And after Arc is onboarded we see:
+
 ![Arc](_images/35.png)
+
+---
+
+## ADC (SMK) + MIAA onboarding via GitOps
+
+> * https://docs.microsoft.com/en-us/azure/azure-arc/data/deploy-system-managed-keytab-active-directory-connector
+> * https://docs.microsoft.com/en-us/azure/azure-arc/data/active-directory-prerequisites
+> * https://docs.microsoft.com/en-us/windows/win32/adschema/active-directory-schema-site
+
+Perform the following on the Domain Controller `OCPLab-DC1`:
+
+```powershell
+Import-Module ActiveDirectory
+
+# New OU for all MIAAs
+New-ADOrganizationalUnit -Name "SQL MIs" -Path "OU=Arc CI,DC=fg,DC=contoso,DC=com"
+
+# Create Domain Service Account for ADC in SA OU
+$pass = "acntorPRESTO!" | ConvertTo-SecureString -AsPlainText -Force
+
+New-ADUser -Name "arcadc-sa" `
+           -UserPrincipalName "arcadc-sa@fg.contoso.com" `
+           -Path "OU=Service Accounts,OU=Arc CI,DC=fg,DC=contoso,DC=com" `
+           -AccountPassword $pass `
+           -Enabled $true `
+           -ChangePasswordAtLogon $false `
+           -PasswordNeverExpires $true
+
+# Provide minimum access in MIAA OU for Service Account
+
+# Localize our SQL MI OU and Service Account
+$Ou = "OU=SQL MIs,OU=Arc CI,DC=fg,DC=contoso,DC=com"
+$DsaName = "arcadc-sa"
+
+# Use the AD Drive - a special Drive "AD:\>"
+# See here: https://devblogs.microsoft.com/scripting/playing-with-the-ad-drive-for-fun-and-profit/
+Set-Location AD:
+
+# Grab our Service Accounts unique Identity - the SID, then cast it to an IdentityReference
+$DsaObj = Get-ADuser -Identity $DsaName
+$DsaObjSID = [System.Security.Principal.SecurityIdentifier] $DsaObj.SID
+$DsaIdentity = [System.Security.Principal.IdentityReference] $DsaObjSID
+
+# Grab ACLs on the existing OU, we're going to append the required permissions to it
+$ACL = Get-Acl -Path $Ou
+
+# Active Directory has a specific set of unique GUIDs per permission object. 
+# For example, for Reset Password, the GUID is: 00299570-246d-11d0-a768-00aa006e0529
+# This is documented here: https://docs.microsoft.com/en-us/windows/win32/adschema/r-user-force-change-password
+$All = [GUID]"00000000-0000-0000-0000-000000000000"
+$Users = [GUID]"bf967aba-0de6-11d0-a285-00aa003049e2"
+$ResetPassword = [GUID]"00299570-246d-11d0-a768-00aa006e0529"
+
+# Reference these GUIDs to create rule objects
+
+# 1. Read all properties in OU
+$Rule1 = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(    
+                                                                        $DsaIdentity,
+                                                                        [System.DirectoryServices.ActiveDirectoryRights]::ReadProperty,
+                                                                        [System.Security.AccessControl.AccessControlType]::Allow,
+                                                                        $All,
+                                                                        [DirectoryServices.ActiveDirectorySecurityInheritance]::All,
+                                                                        $All
+                                                                      )
+# 2. Write all properties in OU
+$Rule2 = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(    
+                                                                        $DsaIdentity,
+                                                                        [System.DirectoryServices.ActiveDirectoryRights]::WriteProperty,
+                                                                        [System.Security.AccessControl.AccessControlType]::Allow,
+                                                                        $All,
+                                                                        [DirectoryServices.ActiveDirectorySecurityInheritance]::All,
+                                                                        $All
+                                                                      )
+
+# 3. Create User objects in OU
+$Rule3 = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(    
+                                                                        $DsaIdentity,
+                                                                        [System.DirectoryServices.ActiveDirectoryRights]::CreateChild,
+                                                                        [System.Security.AccessControl.AccessControlType]::Allow,
+                                                                        $Users,
+                                                                        [DirectoryServices.ActiveDirectorySecurityInheritance]::All
+                                                                      )
+# 4. Delete User objects in OU
+$Rule4 = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(    
+                                                                        $DsaIdentity,
+                                                                        [System.DirectoryServices.ActiveDirectoryRights]::DeleteChild,
+                                                                        [System.Security.AccessControl.AccessControlType]::Allow,
+                                                                        $Users,
+                                                                        [DirectoryServices.ActiveDirectorySecurityInheritance]::All
+                                                                      )
+
+# 5. Reset Password for Descendant User objects
+$Rule5 = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(    
+                                                                        $DsaIdentity,
+                                                                        [System.DirectoryServices.ActiveDirectoryRights]::ExtendedRight,
+                                                                        [System.Security.AccessControl.AccessControlType]::Allow,
+                                                                        $ResetPassword,
+                                                                        [DirectoryServices.ActiveDirectorySecurityInheritance]::Descendents,
+                                                                        $Users
+                                                                      )
+
+# Add these new rules to the existing ACL
+$ACL.AddAccessRule($Rule1)
+$ACL.AddAccessRule($Rule2)
+$ACL.AddAccessRule($Rule3)
+$ACL.AddAccessRule($Rule4)
+$ACL.AddAccessRule($Rule5)
+
+# Commit
+Set-Acl -Path $Ou -AclObject $ACL
+
+# Get all permissions in our OU
+$permissions = (Get-ACL "AD:$((Get-ADOrganizationalUnit -Identity $Ou).distinguishedname)").access
+
+# Filter permissions.IdentityReference for "FG\arcadc-sa"
+$permissions | Where-Object { $_.IdentityReference -eq "FG\$DsaName" }
+
+# Desired output:
+
+# ActiveDirectoryRights : ReadProperty, WriteProperty
+# InheritanceType       : All
+# ObjectType            : 00000000-0000-0000-0000-000000000000
+# InheritedObjectType   : 00000000-0000-0000-0000-000000000000
+# ObjectFlags           : None
+# AccessControlType     : Allow
+# IdentityReference     : FG\arcadc-sa
+# IsInherited           : False
+# InheritanceFlags      : ContainerInherit
+# PropagationFlags      : None
+
+# ActiveDirectoryRights : CreateChild, DeleteChild
+# InheritanceType       : All
+# ObjectType            : bf967aba-0de6-11d0-a285-00aa003049e2
+# InheritedObjectType   : 00000000-0000-0000-0000-000000000000
+# ObjectFlags           : ObjectAceTypePresent
+# AccessControlType     : Allow
+# IdentityReference     : FG\arcadc-sa
+# IsInherited           : False
+# InheritanceFlags      : ContainerInherit
+# PropagationFlags      : None
+
+# ActiveDirectoryRights : ExtendedRight
+# InheritanceType       : Descendents
+# ObjectType            : 00299570-246d-11d0-a768-00aa006e0529
+# InheritedObjectType   : bf967aba-0de6-11d0-a285-00aa003049e2
+# ObjectFlags           : ObjectAceTypePresent, InheritedObjectAceTypePresent
+# AccessControlType     : Allow
+# IdentityReference     : FG\arcadc-sa
+# IsInherited           : False
+# InheritanceFlags      : ContainerInherit
+# PropagationFlags      : InheritOnly
+```
+
+We see in the UI:
+
+![DSA permissions created](_images/36.png)
+
+Note: to delete the OU and recreate (if necessary to repeat the process):
+```powershell
+Get-ADOrganizationalUnit -Identity $Ou |
+    Set-ADObject -ProtectedFromAccidentalDeletion:$false -PassThru |
+    Remove-ADOrganizationalUnit -Confirm:$false
+```
+
+And post commit of ADC manifest, we see DNS Proxy and Security Support is up:
+
+![ADC Up](_images/38.png)
 
 ---
 
