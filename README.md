@@ -291,10 +291,13 @@ Add-DnsServerPrimaryZone -NetworkId "10.216.175.0/24" -ReplicationScope Domain
 # Get reverse zone name
 $Zones = @(Get-DnsServerZone)
 ForEach ($Zone in $Zones) {
-    if ((-not $($Zone.IsAutoCreated)) -and ($Zone.IsReverseLookupZone) -and ($Zone.ZoneName.Split(".")[0] -eq "0")) {
+    if ((-not $($Zone.IsAutoCreated)) -and ($Zone.IsReverseLookupZone)) {
        $Reverse = $Zone.ZoneName
     }
 }
+
+# Add a PTR record to the Reverse Lookup Zone for the Domain Controller. This is needed for when the SQL MI Pod looks up the DC in reverse.
+Add-DNSServerResourceRecordPTR -ZoneName $Reverse -Name 4 -PTRDomainName OCPLab-DC1.fg.contoso.com # 4 is because of the IP address of the DC
 ```
 
 ## DNS records for OpenShift in `OCPLab-DC1` - [from here](https://github.com/openshift/installer/blob/master/docs/user/vsphere/vips-dns.md#dns-records)
@@ -487,6 +490,9 @@ cd $chocoPath
 Invoke-WebRequest $ocPath -OutFile "$chocoPath\$downloadZip"
 Expand-Archive -Path $downloadZip -DestinationPath $chocoPath
 rm README.md
+
+# Download SSMS for later validations
+choco install ssms /y -Force
 ```
 
 ## Clean destroy
@@ -1577,7 +1583,7 @@ And after Arc is onboarded we see:
 
 ---
 
-## ADC (SMK) + MIAA onboarding via GitOps
+## ADC (SMK) onboarding via GitOps
 
 > * https://docs.microsoft.com/en-us/azure/azure-arc/data/deploy-system-managed-keytab-active-directory-connector
 > * https://docs.microsoft.com/en-us/azure/azure-arc/data/active-directory-prerequisites
@@ -1744,6 +1750,53 @@ And post commit of ADC manifest, we see DNS Proxy and Security Support is up:
 
 ---
 
+## MIAA - GP with AD with GitOps
+
+> We will use a ArgoCD healthcheck as defined here: https://argo-cd.readthedocs.io/en/stable/operator-manual/health/#way-1-define-a-custom-health-check-in-argocd-cm-configmap
+
+> BC will need `RWX` - postpone
+
+We commit the SQL MI, and the Argocd LUA health checks trace the CRD deployment to completion:
+
+![MIAA Up](_images/39.png)
+
+Grab IP address allocated to MIAA `LoadBalancer` externally:
+```bash
+miaa_name='sql-gp-ad-1'
+miaa_svcs=$(oc get svc -l=app.kubernetes.io/instance=${miaa_name} -n azure-arc-data -o=json)
+miaa_external_svc=$(echo $services | jq -r '.items[] | select(.spec.type == "LoadBalancer")')
+miaa_external_svc_ip=$(echo $miaa_external_svc | jq -r '.status.loadBalancer.ingress[0].ip')
+echo $miaa_external_svc_ip
+# 10.216.175.48
+```
+
+Add in DNS entry for the K8s service:
+```powershell
+Add-DnsServerResourceRecordA -Name sql-gp-ad-1 -ZoneName fg.contoso.com -IPv4Address 10.216.175.48
+```
+
+Login via SQL Admin creds to `10.216.175.48,31433` or `sql-gp-ad-1.fg.contoso.com,31433`, add in AD Groups as SQL Admin to MIAA:
+```sql
+USE [master]
+GO
+CREATE LOGIN [FG\arcci-admins] FROM WINDOWS WITH DEFAULT_DATABASE=[master]
+GO
+ALTER SERVER ROLE [sysadmin] ADD MEMBER [FG\arcci-admins]
+GO
+```
+
+![MIAA Create Creds](_images/40.png)
+
+Validate login via AD creds from Client VM `OCPLab-DEV1` via DNS entry `sql-gp-ad-1.fg.contoso.com,31433`:
+
+![MIAA AD success](_images/41.png)
+
+And we see that the Controller has been managing the AD Account Creation/Keytab distribution on our behalf:
+
+![MIAA AD creds success](_images/42.png)
+
+---
+
 ## TO-DOs
 
 ### Main
@@ -1762,7 +1815,7 @@ And post commit of ADC manifest, we see DNS Proxy and Security Support is up:
   - [X] Add in MetalLB Operator for `LoadBalancer`
   - [X] Bitnami Sealed Secrets
   - [X] Job onboarder test
-  - [ ] MIAA manifests as another App in the last wave
+  - [X] MIAA manifests as another App in the last wave
 - [ ] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` MIAA to OCP
 - [ ] Rerun through jobs, ensure everything is reproducible
 - [ ] Terraform for all Infra component (vSphere, Azure) - running from Build Agent
