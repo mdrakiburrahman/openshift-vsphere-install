@@ -321,19 +321,11 @@ We see:
 ---
 # `devcontainer` prep
 
-> This has been added to the container bootup
+## Validate DNS reverse lookup into fg.contoso.com domain
+
+This devcontainer has a `/etc/resolv.conf` injection script to forward DNS queries to `ocplab-dc1` - this allows us to query all the needed parties below:
+
 ```bash
-# = = = = = = = = = = = = = = = = = = = 
-# DNS Hack for this VSCode Devcontainer
-# = = = = = = = = = = = = = = = = = = = 
-
-# We will point this container to use `ocplab-DC.fg.contoso.com` as the DNS resolver
-# Since `ocplab-DC` has conditional forwarding for `arclab.local`, and the internet (via Redmond resolver), we should be covered
-cat << EOF > /etc/resolv.conf
-# DNS requests are forwarded to the host. DHCP DNS options are ignored.
-nameserver 10.216.175.4                 # ocplab-DC.fg.contoso.com
-EOF
-
 # DNS Tests
 nslookup api.arcci.fg.contoso.com
 # Address: 10.216.175.6
@@ -415,7 +407,7 @@ rm -rf $installationDir
 mkdir -p $installationDir
 cd $installationDir
 
-# Create config file
+# One time - interactively create config file: install-config.yaml
 openshift-install create install-config
 # ? Platform vsphere
 # ? vCenter arclab-vc.arclab.local
@@ -432,6 +424,14 @@ openshift-install create install-config
 # ? Cluster Name arcci
 # ? Pull Secret [? for help] ********************************
 # INFO Install-Config created in: .
+
+tree
+# .
+# ├── [      13407]  .openshift_install_state.json          # OpenShift install state file
+# ├── [       2973]  .openshift_install.log                 # Installer logs
+# └── [       3644]  install-config.yaml                    # Reusable config that can be used for reinstalls
+
+# Note that installer below will eat up the YAML file - so we back it up for future.
 
 # Fire install
 openshift-install create cluster --log-level=debug
@@ -484,13 +484,14 @@ Complete:
 ```PowerShell
 # Download oc cli
 $chocoPath = "C:\ProgramData\chocolatey\bin"
-$ocPath = "https://access.cdn.redhat.com/content/origin/files/sha256/b5/b5be74fba204c3c71f14ad9f20c4432215861b9e83008bd597445b77b7d71aec/oc-4.10.17-windows.zip?user=9f0797baa5932892e224995847e5b117&_auth_=1654762464_3d3e28adce1ce122828a13a5a48c87f4"
-$downloadZip = "oc-4.10.17-windows.zip"
+$ocPath = "https://rakirahman.blob.core.windows.net/public/binaries/oc-4.10.20-windows.zip"
+$downloadZip = "oc-4.10.20-windows.zip"
 
 cd $chocoPath
 Invoke-WebRequest $ocPath -OutFile "$chocoPath\$downloadZip"
 Expand-Archive -Path $downloadZip -DestinationPath $chocoPath
 rm README.md
+rm $downloadZip
 
 # Download SSMS for later validations
 choco install ssms /y -Force
@@ -687,7 +688,7 @@ oc get co | grep authentication -B 1
 # NAME                                       VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
 # authentication                             4.10.16   True        False         False      41h  
 
-# At this point, authentication will work
+# At this point, authentication will work, but not authorization (i.e. our Administrator and other users will have zero permission to anything)
 ```
 ![Result](_images/13.png)
 
@@ -698,6 +699,7 @@ oc get co | grep authentication -B 1
 > * https://examples.openshift.pub/cluster-configuration/authentication/activedirectory-ldap/#deploy-recular-sync-via-cronjobscheduledjob
 
 ```bash
+# Create temp staging folder
 export authZ="/workspaces/openshift-vsphere-install/AuthZ"
 rm -rf $authZ
 mkdir -p $authZ
@@ -740,7 +742,7 @@ EOF
 # Group Sync CronJob
 oc create ns ldap-sync
 
-# Create a Secret with the relevant files
+# Create a Secret with the relevant files - these will get used by our CronJob -> Job -> oc cli pod
 oc create secret generic ldap-sync -n ldap-sync \
  --from-file=ldap-sync.yaml=ldap-sync.yaml \
  --from-file=group-allowlist.txt=group-allowlist.txt
@@ -758,7 +760,7 @@ oc adm policy add-cluster-role-to-user ldap-group-sync \
 
 # Create the CronJob
 cat << EOF | oc apply -f -
-apiVersion: batch/v1beta1
+apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: ldap-group-sync
@@ -795,6 +797,9 @@ spec:
               secretName: ldap-sync
 EOF
 
+# This will trigger a job every 30 mins or so - to run it immediately, we run:
+oc create job --from=cronjob/ldap-group-sync ldap-group-sync-manual -n ldap-sync
+
 # Validate
 oc get groups
 # NAME           USERS
@@ -804,6 +809,9 @@ oc get groups
 # Assign RBAC to group
 oc adm policy add-cluster-role-to-group cluster-admin arcci-admins
 oc adm policy add-cluster-role-to-group cluster-reader arcci-users
+
+# Remove temp folder
+rm -rf $authZ
 ```
 
 We see:
@@ -814,7 +822,7 @@ We see:
 `Administrator` - read-write:
 ![Result](_images/15.png)
 
-> Also, note that `boor` cannot read Secrets - which is good.
+> Also, note that `boor` cannot read Secrets, or create a terminal session. It can however, read pod logs everywhere - which is exactly what we want.
 
 ---
 
@@ -886,11 +894,12 @@ touch /data/myfile.txt
 apt-get update && apt-get install -y wget
 wget https://github.com/Microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorks2019.bak -O /data/AdventureWorks2019.bak
 
-# ls -lR
-total 212104 # 212 MB
--rw-rw-rw-. 1 root root 217178112 Dec  8  2021 AdventureWorks2019.bak
-drwx------. 2 root root     16384 Jun 26 10:57 lost+found
--rw-rw-rw-. 1 root root         0 Jun 26 10:59 myfile.txt
+cd data
+ls -lR
+# total 212104 # 212 MB
+# -rw-rw-rw-. 1 root root 217178112 Dec  8  2021 AdventureWorks2019.bak
+# drwx------. 2 root root     16384 Jun 26 10:57 lost+found
+# -rw-rw-rw-. 1 root root         0 Jun 26 10:59 myfile.txt
 ```
 
 Before downloading large file:
@@ -899,9 +908,16 @@ Before downloading large file:
 After:
 ![Filestore](_images/20.png)
 
+Remove the namespace:
+```bash
+oc delete ns vspherecsitest
+```
+
 ---
 
 ## New `MachineSet`
+
+> These steps are here only for reference, we will do this via GitOps instead
 
 > Ref:
 > * https://docs.openshift.com/container-platform/4.10/machine_management/creating_machinesets/creating-machineset-vsphere.html
@@ -909,79 +925,85 @@ After:
 > * https://www.youtube.com/watch?v=3no-WT557ls&ab_channel=OCPdude
 > * https://medium.com/@wintonjkt/machinesets-and-auto-scaling-openshift-cluster-a24c458a200a
 
-### Clean YAML generator
-```bash
-export type='machineset'
-export original_name='arcci-jlzvv-worker'
-export namespace='openshift-machine-api'
+<details>
+  <summary>Creating `MachineSet` manually</summary>
+  
+  ### Clean YAML generator
 
-oc get $type $original_name  -n $namespace -o=json | jq 'del(.metadata.resourceVersion,.metadata.uid,.metadata.selfLink,.metadata.creationTimestamp,.metadata.annotations,.metadata.generation,.metadata.ownerReferences,.status,.spec.template.spec.lifecycleHooks,.spec.template.spec.metadata,.spec.template.spec.providerSpec.value.metadata)' | yq eval . --prettyPrint
-```
+  ```bash
+  export type='machineset'
+  export original_name='arcci-jlzvv-worker'
+  export namespace='openshift-machine-api'
 
-### Apply big MachineSet
-```bash
-# Variables
-export infra_id=$(oc get -o jsonpath='{.status.infrastructureName}{"\n"}' infrastructure cluster)
-export name='worker-big'
-export replicas='3'
-export disk='200'
-export mem='20480'
-export cpu='14'
-export network='DataSvc PG OCP VM Network (VLAN 111)'
-export datacenter='Redmond Datacenter'
-export server='arclab-vc.arclab.local'
-export datastore='ArcLab-NFS-01'
-export resourcepool='ArcLab Workload Cluster'
+  oc get $type $original_name  -n $namespace -o=json | jq 'del(.metadata.resourceVersion,.metadata.uid,.metadata.selfLink,.metadata.creationTimestamp,.metadata.annotations,.metadata.generation,.metadata.ownerReferences,.status,.spec.template.spec.lifecycleHooks,.spec.template.spec.metadata,.spec.template.spec.providerSpec.value.metadata)' | yq eval . --prettyPrint
+  ```
 
-# Add "--dry-run=client" for dry run
-cat << EOF | oc apply -f -
-apiVersion: machine.openshift.io/v1beta1
-kind: MachineSet
-metadata:
-  labels:
-    machine.openshift.io/cluster-api-cluster: ${infra_id}
-  name: ${infra_id}-${name}
-  namespace: openshift-machine-api
-spec:
-  replicas: ${replicas}
-  selector:
-    matchLabels:
+  ### Apply big MachineSet
+  ```bash
+  # Variables
+  export infra_id=$(oc get -o jsonpath='{.status.infrastructureName}{"\n"}' infrastructure cluster)
+  export name='worker-big'
+  export replicas='3'
+  export disk='200'
+  export mem='20480'
+  export cpu='14'
+  export network='DataSvc PG OCP VM Network (VLAN 111)'
+  export datacenter='Redmond Datacenter'
+  export server='arclab-vc.arclab.local'
+  export datastore='ArcLab-NFS-01'
+  export resourcepool='ArcLab Workload Cluster'
+
+  # Add "--dry-run=client" for dry run
+  cat << EOF | oc apply -f -
+  apiVersion: machine.openshift.io/v1beta1
+  kind: MachineSet
+  metadata:
+    labels:
       machine.openshift.io/cluster-api-cluster: ${infra_id}
-      machine.openshift.io/cluster-api-machineset: ${infra_id}-${name}
-  template:
-    metadata:
-      labels:
+    name: ${infra_id}-${name}
+    namespace: openshift-machine-api
+  spec:
+    replicas: ${replicas}
+    selector:
+      matchLabels:
         machine.openshift.io/cluster-api-cluster: ${infra_id}
-        machine.openshift.io/cluster-api-machine-role: worker
-        machine.openshift.io/cluster-api-machine-type: worker
         machine.openshift.io/cluster-api-machineset: ${infra_id}-${name}
-    spec:
-      providerSpec:
-        value:
-          apiVersion: machine.openshift.io/v1beta1
-          credentialsSecret:
-            name: vsphere-cloud-credentials
-          diskGiB: ${disk}
-          kind: VSphereMachineProviderSpec
-          memoryMiB: ${mem}
-          network:
-            devices:
-              - networkName: ${network}
-          numCPUs: ${cpu}
-          numCoresPerSocket: 2
-          snapshot: ""
-          template: ${infra_id}-rhcos
-          userDataSecret:
-            name: worker-user-data
-          workspace:
-            datacenter: ${datacenter}
-            datastore: ${datastore}
-            folder: /${datacenter}/vm/${infra_id}
-            resourcePool: /${datacenter}/host/${resourcepool}/Resources
-            server: ${server}
-EOF
-# machineset.machine.openshift.io/arcci-jlzvv-worker-big created
-```
+    template:
+      metadata:
+        labels:
+          machine.openshift.io/cluster-api-cluster: ${infra_id}
+          machine.openshift.io/cluster-api-machine-role: worker
+          machine.openshift.io/cluster-api-machine-type: worker
+          machine.openshift.io/cluster-api-machineset: ${infra_id}-${name}
+      spec:
+        providerSpec:
+          value:
+            apiVersion: machine.openshift.io/v1beta1
+            credentialsSecret:
+              name: vsphere-cloud-credentials
+            diskGiB: ${disk}
+            kind: VSphereMachineProviderSpec
+            memoryMiB: ${mem}
+            network:
+              devices:
+                - networkName: ${network}
+            numCPUs: ${cpu}
+            numCoresPerSocket: 2
+            snapshot: ""
+            template: ${infra_id}-rhcos
+            userDataSecret:
+              name: worker-user-data
+            workspace:
+              datacenter: ${datacenter}
+              datastore: ${datastore}
+              folder: /${datacenter}/vm/${infra_id}
+              resourcePool: /${datacenter}/host/${resourcepool}/Resources
+              server: ${server}
+  EOF
+  # machineset.machine.openshift.io/arcci-jlzvv-worker-big created
+  ```
+
+</details>
 
 We see the VMs getting created:
 ![Deploy](_images/17.png)
@@ -1010,7 +1032,8 @@ And we see events per machine:
 > * https://access.redhat.com/documentation/en-us/openshift_container_platform/4.10/html/storage/using-container-storage-interface-csi#csi-tp-enable_persistent-storage-csi-azure-file
 > * https://access.redhat.com/documentation/en-us/openshift_container_platform/4.10/html/nodes/working-with-clusters#nodes-cluster-enabling
 
-Create `ClusterRole` and add to `ServiceAccount`:
+Create `ClusterRole` for Secret Read/Write and add to `ServiceAccount` that binds PVCs:
+
 ```bash
 cat << EOF | oc apply -f -
 apiVersion: rbac.authorization.k8s.io/v1
@@ -1029,34 +1052,45 @@ oc adm policy add-cluster-role-to-user system:azure-cloud-provider system:servic
 # clusterrole.rbac.authorization.k8s.io/system:azure-cloud-provider added: "system:serviceaccount:kube-system:persistent-volume-binder"
 ```
 
-> Should do this^ via Terraform instead
-
 ### Testing Static provisioning
 
 #### Using Terraform
 
-Create Storage Account and `StorageClass` via Terraform:
+Create Storage Account, `StorageClass` and 25 `RWX` `PVs`/Shares via Terraform:
 
 ```bash
 # ---------------------
 # ENVIRONMENT VARIABLES
 # For Terraform
 # ---------------------
+# OCP
+export kube_context="kubectl config view --minify --flatten --context=admin"
+export infra_id=$(oc get -o jsonpath='{.status.infrastructureName}{"\n"}' infrastructure cluster)
+
+export TF_VAR_host=$(eval "$kube_context" | yq .clusters[0].cluster.server)
+export TF_VAR_client_certificate=$(eval "$kube_context" | yq .users[0].user.client-certificate-data)
+export TF_VAR_client_key=$(eval "$kube_context" | yq .users[0].user.client-key-data)
+export TF_VAR_cluster_ca_certificate=$(eval "$kube_context" | yq .clusters[0].cluster.certificate-authority-data)
+
 # Azure
 export TF_VAR_SPN_CLIENT_ID=$spnClientId
 export TF_VAR_SPN_CLIENT_SECRET=$spnClientSecret
 export TF_VAR_SPN_TENANT_ID=$spnTenantId
 export TF_VAR_SPN_SUBSCRIPTION_ID=$subscriptionId
-export TF_VAR_prefix="ocpvspherearc"
-export TF_VAR_file_share_name="fls-1"
-export TF_VAR_file_share_size=75
+export TF_VAR_prefix="ocpvsphere${infra_id}"
 
-# OCP
-export kube_context="kubectl config view --minify --flatten --context=admin"
-export TF_VAR_host=$(eval "$kube_context" | yq .clusters[0].cluster.server)
-export TF_VAR_client_certificate=$(eval "$kube_context" | yq .users[0].user.client-certificate-data)
-export TF_VAR_client_key=$(eval "$kube_context" | yq .users[0].user.client-key-data)
-export TF_VAR_cluster_ca_certificate=$(eval "$kube_context" | yq .clusters[0].cluster.certificate-authority-data)
+export TF_VAR_num_shares_pvs="25"
+
+export TF_VAR_file_share_name="fls-1"
+export TF_VAR_file_share_size=10 # GB
+
+# Remote State in Azure Blob
+export stateFileKeyName="openshift-vsphere-install/${infra_id}/terraform.tfstate"
+
+export TF_CLI_ARGS_init="-backend-config='storage_account_name=${TFSTATE_STORAGE_ACCOUNT_NAME}'"
+export TF_CLI_ARGS_init="$TF_CLI_ARGS_init -backend-config='container_name=${TFSTATE_STORAGE_ACCOUNT_CONTAINER_NAME}'"
+export TF_CLI_ARGS_init="$TF_CLI_ARGS_init -backend-config='access_key=${TFSTATE_STORAGE_ACCOUNT_KEY}'"
+export TF_CLI_ARGS_init="$TF_CLI_ARGS_init -backend-config='key=${stateFileKeyName}'"
 
 # ---------------------
 # DEPLOY TERRAFORM
@@ -1077,6 +1111,27 @@ export secretName=$(terraform output --raw storage_class_secret_name)
 export secretNamespace=$(terraform output --raw storage_class_secret_namespace)
 export shareName='fls-1' # Can get TF to spit this out
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ### Test
 
