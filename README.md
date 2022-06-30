@@ -1,101 +1,34 @@
 # Openshift vSphere Install
-Automated environment for spinning up OCP on VSphere lab
-
-## `govc` notes
-
-```bash
-govc version
-# govc 0.27.5
-
-govc about
-# FullName:     VMware vCenter Server 7.0.3 build-**19717403**
-# Name:         VMware vCenter Server
-# Vendor:       VMware, Inc.
-# Version:      7.0.3
-# ...
-
-govc datacenter.info
-# Name:                Your Datacenter
-#   Path:              /Your Datacenter
-#   Hosts:             4
-#   Clusters:          1
-#   Virtual Machines:  6
-#   Networks:          1
-#   Datastores:        1
-
-govc ls
-# /Your Datacenter/vm
-# /Your Datacenter/network
-# /Your Datacenter/host
-# /Your Datacenter/datastore
-
-govc find -h
-#   a    VirtualApp
-#   c    ClusterComputeResource
-#   d    Datacenter
-#   f    Folder
-#   g    DistributedVirtualPortgroup
-#   h    HostSystem
-#   m    VirtualMachine
-#   n    Network
-#   o    OpaqueNetwork
-#   p    ResourcePool
-#   r    ComputeResource
-#   s    Datastore
-#   w    DistributedVirtualSwitch
-# ...
-
-# Store datacenter name
-dc=$(govc ls /)
-# /Your Datacenter
-
-# List all VMs
-govc ls /*/vm/*/*/*
-# /Your Datacenter/vm/Foo/Bar/OCPLab_Templates/OCPLab-WS2022
-# /Your Datacenter/vm/Foo/Bar/OCPLab_VMs/OCPLab-DEV-1
-# /Your Datacenter/vm/Foo/Bar/OCPLab_VMs/OCPLab-DC1
-
-# List network
-govc ls /*/network
-# /Your Datacenter/network/DataSvc PG VM Network PG (VLAN 106)
-
-# List ClusterComputeResource
-govc ls -t ClusterComputeResource host
-# /Your Datacenter/host/ArcLab Workload Cluster
-
-# Find templates in a specific folder
-template_folder="ArcLab CL Templates"
-govc find $dc/vm/$template_folder -type m 
-
-# Get everything back as json
-govc object.collect -json 
-```
-
-> `#TODO` - automate deployment of DC + DEV1 via Terraform or `govc`, bootstrap scripts and sequence etc
-
----
+Environment spinup steps for OCP on VSphere lab.
 
 # Domain Controller/DNS/DHCP installation
 
-## Re-imaging prep
+<details>
+  <summary>Re-imaging prep</summary>
+  
+  ```powershell
+  # Turn off firewall
+  Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 
-```powershell
-# Turn off firewall
-Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+  # Enable remote desktop
+  Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
+  ```
 
-# Enable remote desktop
-Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
-```
+</details>
 
-## `OCPLab-DC1`
+---
+
+## `ocplab-dc1`
 
 We do a straightforward deploy, no Customizations (we will rename in RDP just for this one):
 
 ![Deploy](_images/3.png)
 
 ### Rename machine
+
+Go in through VMRC to Copy-Paste:
 ```powershell
-$vmName = "OCPLab-DC1"
+$vmName = "ocplab-dc1"
 $password = ConvertTo-SecureString 'acntorPRESTO!' -AsPlainText -Force
 $localhostAdminUser = New-Object System.Management.Automation.PSCredential ('Administrator', $password)
 Rename-Computer -NewName $vmName -LocalCredential $localhostAdminUser -Restart
@@ -213,19 +146,25 @@ Add-DhcpServerInDC -DnsName "$hostname.$domainName"
 # Display info about the scope
 Get-DhcpServerv4Scope | Select-Object -Property *
 
-# Display leases before adding Client VM
+# Display leases before adding other VMs
 Get-DhcpServerV4Reservation -ScopeID $scopeID
-
-# Get 5 next IP Addresses that are free
-Get-DhcpServerv4FreeIPAddress -ScopeID $scopeID -NumAddress 5
+# Empty
 
 # Add Exclusion ranges
 
-## OpenShift Routes
-Add-DhcpServerv4ExclusionRange -ScopeId 10.216.175.0 -StartRange 10.216.175.6 -EndRange 10.216.175.10
+## OpenShift Routes + 2 Extras
+Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.175.6 -EndRange 10.216.175.10
 
 ## MetalLB
-Add-DhcpServerv4ExclusionRange -ScopeId 10.216.175.0 -StartRange 10.216.175.48 -EndRange 10.216.175.79
+Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.175.48 -EndRange 10.216.175.79
+
+# Get 5 next IP Addresses that are free
+Get-DhcpServerv4FreeIPAddress -ScopeID $scopeID -NumAddress 5
+# 10.216.175.5        <- DC2
+# 10.216.175.11       <- OpenShift nodes
+# 10.216.175.12
+# 10.216.175.13
+# 10.216.175.14
 ```
 
 When we started - as expected, no leases yet:
@@ -254,7 +193,7 @@ Add-DnsServerConditionalForwarderZone -Name "arclab.local" -MasterServers "10.21
 ```
 ![Result](_images/4.png)
 
-## `OCPLab-DEV-1`
+## `ocplab-dc2`
 
 Use the vSphere native feature `VM Customization Specifications` to
 * Use the vSphere machines name as the hostname
@@ -270,7 +209,7 @@ Use the vSphere native feature `VM Customization Specifications` to
 
 The VM will go through it's reboot cycles to join the domain etc.
 
-Post boot in `OCPLab-DEV1`:
+Post boot in `ocplab-dc2`:
 
 ![Result](_images/7.png)
 
@@ -279,7 +218,64 @@ Post boot in `OCPLab-DEV1`:
 Check leases again in Domain Controller:
 ![Result](_images/9.png)
 
-Everything is up!
+Promote `ocplab-dc2` to secondary Domain Controller - we will need to switch to Static IP:
+```powershell
+# = = = = = = = 
+# Set Static IP
+# = = = = = = = 
+
+$IP = "10.216.175.5"
+$MaskBits = 24 # This means subnet mask = 255.255.255.0 - http://jodies.de/ipcalc?host=255.255.255.0&mask1=24&mask2=
+$Gateway = (Get-NetIPConfiguration | Foreach IPv4DefaultGateway | Select NextHop)."NextHop"
+$IPType = "IPv4"
+
+# Retrieve the network adapter that you want to configure
+$adapter = Get-NetAdapter | ? {$_.Status -eq "up"}
+
+# Remove any existing IP, gateway from our ipv4 adapter
+If (($adapter | Get-NetIPConfiguration).IPv4Address.IPAddress) {
+ $adapter | Remove-NetIPAddress -AddressFamily $IPType -Confirm:$false
+}
+If (($adapter | Get-NetIPConfiguration).Ipv4DefaultGateway) {
+ $adapter | Remove-NetRoute -AddressFamily $IPType -Confirm:$false
+}
+
+ # Configure the IP address and default gateway
+$adapter | New-NetIPAddress `
+ -AddressFamily $IPType `
+ -IPAddress $IP `
+ -PrefixLength $MaskBits `
+ -DefaultGateway $Gateway
+
+# Configure the DNS client server IP addresses - DC1 and itself
+$adapter | Set-DnsClientServerAddress -ServerAddresses ("10.216.175.4","127.0.0.1")
+
+# = = = = = = = 
+# Promote to DC
+# = = = = = = = 
+$domainName = 'fg.contoso.com'
+$domainAdminName = "FG\Administrator"
+$domainAdminPassword = "acntorPRESTO!"
+$secureDomainAdminPassword = $domainAdminPassword | ConvertTo-SecureString -AsPlainText -Force
+
+# Create credential object to pass into -Credential flag
+$cred = New-Object -TypeName System.Management.Automation.PSCredential($domainAdminName, $secureDomainAdminPassword)
+
+# Promote to DC in existing domain
+Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
+
+Install-ADDSDomainController `
+    -DomainName "$domainName" `
+    -InstallDns:$true `
+    -NoRebootOnCompletion:$false `
+    -Credential $cred `
+    -SafeModeAdministratorPassword $secureDomainAdminPassword `
+    -Force:$true
+```
+
+![DC2 IP Config completed](_images/58.png)
+
+![DC2 Upgrade completed](_images/59.png)
 
 ---
 
@@ -287,7 +283,7 @@ Everything is up!
 
 > `IPI` because we want horizontal scalability on our `MachineSets`
 
-## Add a Reverse Lookup Zone on `OCPLab-DC1`
+## Add a Reverse Lookup Zone on `ocplab-dc1`
 ```powershell
 # Add a reverse lookup zone - VLAN 111
 Add-DnsServerPrimaryZone -NetworkId "10.216.175.0/24" -ReplicationScope Domain
@@ -301,10 +297,11 @@ ForEach ($Zone in $Zones) {
 }
 
 # Add a PTR record to the Reverse Lookup Zone for the Domain Controller. This is needed for when the SQL MI Pod looks up the DC in reverse.
-Add-DNSServerResourceRecordPTR -ZoneName $Reverse -Name 4 -PTRDomainName OCPLab-DC1.fg.contoso.com # 4 is because of the IP address of the DC
+Add-DNSServerResourceRecordPTR -ZoneName $Reverse -Name 4 -PTRDomainName ocplab-dc1.fg.contoso.com # 4 is because of the IP address of DC1
+Add-DNSServerResourceRecordPTR -ZoneName $Reverse -Name 5 -PTRDomainName ocplab-dc2.fg.contoso.com 
 ```
 
-## DNS records for OpenShift in `OCPLab-DC1` - [from here](https://github.com/openshift/installer/blob/master/docs/user/vsphere/vips-dns.md#dns-records)
+## DNS records for OpenShift in `ocplab-dc1` - [from here](https://github.com/openshift/installer/blob/master/docs/user/vsphere/vips-dns.md#dns-records)
 
 ```PowerShell
 $clusterName = 'arcci'
@@ -330,11 +327,11 @@ We see:
 # DNS Hack for this VSCode Devcontainer
 # = = = = = = = = = = = = = = = = = = = 
 
-# We will point this container to use `OCPLab-DC.fg.contoso.com` as the DNS resolver
-# Since `OCPLab-DC` has conditional forwarding for `arclab.local`, and the internet (via Redmond resolver), we should be covered
+# We will point this container to use `ocplab-DC.fg.contoso.com` as the DNS resolver
+# Since `ocplab-DC` has conditional forwarding for `arclab.local`, and the internet (via Redmond resolver), we should be covered
 cat << EOF > /etc/resolv.conf
 # DNS requests are forwarded to the host. DHCP DNS options are ignored.
-nameserver 10.216.175.4                 # OCPLab-DC.fg.contoso.com
+nameserver 10.216.175.4                 # ocplab-DC.fg.contoso.com
 EOF
 
 # DNS Tests
@@ -482,7 +479,7 @@ Complete:
 
 ![Result](_images/11.png)
 
-## Access `oc` and vSphere from `OCPLab-DEV-1`
+## Access `oc` and vSphere from `ocplab-dc2`
 
 ```PowerShell
 # Download oc cli
@@ -561,7 +558,7 @@ spec:
 EOF
 ```
 
-### LDAP configuration on `OCPLab-DC1`
+### LDAP configuration on `ocplab-dc1`
 
 #### Create AD demo objects
 * OU: `Arc CI`
@@ -1593,7 +1590,7 @@ And after Arc is onboarded we see:
 > * https://docs.microsoft.com/en-us/azure/azure-arc/data/active-directory-prerequisites
 > * https://docs.microsoft.com/en-us/windows/win32/adschema/active-directory-schema-site
 
-Perform the following on the Domain Controller `OCPLab-DC1`:
+Perform the following on the Domain Controller `ocplab-dc1`:
 
 ```powershell
 Import-Module ActiveDirectory
@@ -1791,7 +1788,7 @@ GO
 
 ![MIAA Create Creds](_images/40.png)
 
-Validate login via AD creds from Client VM `OCPLab-DEV1` via DNS entry `sql-gp-ad-1.fg.contoso.com,31433`:
+Validate login via AD creds from Client VM `ocplab-dc2` via DNS entry `sql-gp-ad-1.fg.contoso.com,31433`:
 
 ![MIAA AD success](_images/41.png)
 
@@ -1805,13 +1802,13 @@ And we see that the Controller has been managing the AD Account Creation/Keytab 
 
 ### Create Build Agent in vSphere
 
-We have an Ubuntu 20.04 vanilla template image, and a `VM Customization Specifications` that onboards the Machine to our `OCPLab-DC1` DNS Server/DHCP:
+We have an Ubuntu 20.04 vanilla template image, and a `VM Customization Specifications` that onboards the Machine to our `ocplab-dc1` DNS Server/DHCP:
 
 ![Vanila 20.04](_images/44.png)
 
 ![VM Custom Spec](_images/45.png)
 
-We create a VM from this Template called `OCPLab-AGENT1`:
+We create a VM from this Template called `ocplab-AGENT1`:
 
 ![Agent VM deploy](_images/46.png)
 
