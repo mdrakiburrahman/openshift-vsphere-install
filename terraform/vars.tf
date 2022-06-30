@@ -56,7 +56,13 @@ variable "cluster_ca_certificate" {
 variable "prefix" {
   description = "Prefix to append to all resources"
   type        = string
-  default     = "ocpvsphere"
+  default     = "arcci-xxxxx"
+}
+
+variable "storageclass_name" {
+  description = "The name of the K8s storageClass"
+  type        = string
+  default     = "azure-file"
 }
 
 variable "resource_group_location" {
@@ -78,14 +84,20 @@ variable "tags" {
   }
 }
 
-variable "file_share_name" {
-  description = "Name of one file share to create PVC"
-  type        = string
-  default     = "fls-1"
+variable "pvshare_size" {
+  description = "File share AKA pv size in GB"
+  type        = number
+  default     = 5
 }
 
-variable "file_share_size" {
-  description = "File share size in GB"
+variable "pvshare_prefix" {
+  description = "Prefix to append to file share names"
+  type        = string
+  default     = "fls-"
+}
+
+variable "pvshare_nums" {
+  description = "Number of fileshare/pvs to allocate"
   type        = number
-  default     = 100
+  default     = 10
 }

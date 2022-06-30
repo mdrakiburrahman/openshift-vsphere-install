@@ -1054,7 +1054,7 @@ oc adm policy add-cluster-role-to-user system:azure-cloud-provider system:servic
 
 ### Testing Static provisioning
 
-#### Using Terraform
+#### Provision via Terraform
 
 Create Storage Account, `StorageClass` and 25 `RWX` `PVs`/Shares via Terraform:
 
@@ -1077,12 +1077,10 @@ export TF_VAR_SPN_CLIENT_ID=$spnClientId
 export TF_VAR_SPN_CLIENT_SECRET=$spnClientSecret
 export TF_VAR_SPN_TENANT_ID=$spnTenantId
 export TF_VAR_SPN_SUBSCRIPTION_ID=$subscriptionId
-export TF_VAR_prefix="ocpvsphere${infra_id}"
-
-export TF_VAR_num_shares_pvs="25"
-
-export TF_VAR_file_share_name="fls-1"
-export TF_VAR_file_share_size=10 # GB
+export TF_VAR_prefix="${infra_id}"
+export TF_VAR_pvshare_size=10 # GB
+export TF_VAR_pvshare_prefix="fls-"
+export TF_VAR_pvshare_nums=25
 
 # Remote State in Azure Blob
 export stateFileKeyName="openshift-vsphere-install/${infra_id}/terraform.tfstate"
@@ -1096,42 +1094,34 @@ export TF_CLI_ARGS_init="$TF_CLI_ARGS_init -backend-config='key=${stateFileKeyNa
 # DEPLOY TERRAFORM
 # ---------------------
 cd /workspaces/openshift-vsphere-install/terraform
+
 terraform init
+
 terraform plan
+
+# Plan: 55 to add, 0 to change, 0 to destroy.
+
 terraform apply -auto-approve
+
+# Apply complete! Resources: 55 added, 0 changed, 0 destroyed.
 
 # Outputs:
 
-# storage_account_name = "ocpvspherearcsa87a8dc4c"
+# storage_account_name = "arcciwcgvjsa8d9a8680"
 # storage_class_name = "azure-file"
-# storage_class_secret_name = "azure-file-ocpvspherearcsa87a8dc4c-csi-driver-secret"
+# storage_class_secret_name = "azure-file-arcciwcgvjsa8d9a8680-csi-driver-secret"
 # storage_class_secret_namespace = "openshift-cluster-csi-drivers"
 
-export secretName=$(terraform output --raw storage_class_secret_name)
-export secretNamespace=$(terraform output --raw storage_class_secret_namespace)
-export shareName='fls-1' # Can get TF to spit this out
+# We will dynamically bind to the PVs created as PVCs are requested - so we don't need the info above, other than storage_class_name
+
+export storageAccountName=$(terraform output --raw storage_account_name)
+export storageClassName=$(terraform output --raw storage_class_name)
+
 ```
 
+We see the provisioned infra:
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+![Result](_images/60.png)
 
 ### Test
 
@@ -1145,22 +1135,6 @@ metadata:
   name: azfiletest
 ---
 apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: pv0001
-spec:
-  capacity:
-    storage: 5Gi
-  accessModes:
-    - ReadWriteMany
-  storageClassName: azure-file
-  azureFile:
-    secretName: $secretName
-    secretNamespace: $secretNamespace
-    shareName: $shareName
-    readOnly: false
----
-apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: claim1
@@ -1170,9 +1144,8 @@ spec:
     - ReadWriteMany
   resources:
     requests:
-      storage: 5Gi
-  storageClassName: azure-file
-  volumeName: pv0001
+      storage: 10Gi
+  storageClassName: $storageClassName
 ---
 apiVersion: v1
 kind: Pod
@@ -1200,10 +1173,58 @@ oc exec -it nginx -n azfiletest -- /bin/sh
 touch /data/myfile.txt
 ```
 
-And we see our file in the file share:
+And we see our file in the file share, with one of the random PVs being bound:
 ![Result](_images/21.png)
 
-> The downside here is - we need to create a File Share manually every time, which is silly. I guess we could have pre-created Fileshares and PVs but that's also silly.
+> The advantage of Terraform here is, if we need more `RWX` volumes, we can just increment the number and reapply terraform.
+
+#### Cleanup and reconcile
+
+> * https://stackoverflow.com/questions/50667437/what-to-do-with-released-persistent-volume
+
+Let's blow away the PVC and namespace and see how we can reclaim the PV:
+
+```bash
+oc delete ns azfiletest
+```
+
+So that deletes the `PVC`, but the `PV` and actual file is stil there:
+
+![Result](_images/61.png)
+
+So if we don't care about the data in the "PVShare", we just delete it from ARM/K8s, and run Terraform again to reprovision:
+
+> If we do care about keeping the data, there's great [steps here](https://stackoverflow.com/a/59406641/8954538)
+
+```bash
+export pvshare_name="fls-9"
+
+# Delete from K8s
+oc delete pv $pvshare_name
+
+# Delete from ARM
+az login --service-principal --username $spnClientId --password $spnClientSecret --tenant $spnTenantId
+az account set --subscription $subscriptionId
+
+az storage share delete --name $pvshare_name \
+                        --account-name $storageAccountName
+# ...
+# {
+#   "deleted": true
+# }
+
+# Reconcile gap - 1 PV + 1 Share - via Terraform
+terraform plan
+# Plan: 2 to add, 0 to change, 0 to destroy.
+
+terraform apply -auto-approve
+```
+
+Good as new!
+
+![Result](_images/61.png)
+
+
 
 ### Testing Dynamic provisioning
 
