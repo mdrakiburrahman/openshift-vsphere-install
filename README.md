@@ -37,7 +37,7 @@ Rename-Computer -NewName $vmName -LocalCredential $localhostAdminUser -Restart
 
 ### Set Static IP Address
 
-Make sure to **trigger this whole script from ISE**, because RDP will get booted:
+Trigger the script through VMRC so IP address change doesn't drop our RDP:
 
 ```powershell
 # In case we want to start with a DHCP assigned range
@@ -152,8 +152,8 @@ Get-DhcpServerV4Reservation -ScopeID $scopeID
 
 # Add Exclusion ranges
 
-## OpenShift Routes + 2 Extras
-Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.175.6 -EndRange 10.216.175.10
+## DC [0 - 5] + OpenShift Routes [6 - 7] + 3 Extras [8 - 10]
+Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.175.0 -EndRange 10.216.175.10
 
 ## MetalLB
 Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.175.48 -EndRange 10.216.175.79
@@ -833,10 +833,7 @@ We see:
 > * https://docs.openshift.com/container-platform/4.10/storage/persistent_storage/persistent-storage-vsphere.html
 > * (`RWO` looks like) https://docs.openshift.com/container-platform/4.10/storage/understanding-persistent-storage.html#pv-access-modes_understanding-persistent-storage
 
-Looks like we get this for free with IPI!
-![Result](_images/16.png)
-
-We change the default `storageclass`
+Looks like we get this for free with IPI. We change the default `storageclass`
 ```bash
 oc patch storageclass thin -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
 oc patch storageclass thin-csi -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
@@ -917,93 +914,7 @@ oc delete ns vspherecsitest
 
 ## New `MachineSet`
 
-> These steps are here only for reference, we will do this via GitOps instead
-
-> Ref:
-> * https://docs.openshift.com/container-platform/4.10/machine_management/creating_machinesets/creating-machineset-vsphere.html
-> * https://access.redhat.com/documentation/en-us/openshift_container_platform/4.7/html/machine_management/creating-infrastructure-machinesets
-> * https://www.youtube.com/watch?v=3no-WT557ls&ab_channel=OCPdude
-> * https://medium.com/@wintonjkt/machinesets-and-auto-scaling-openshift-cluster-a24c458a200a
-
-<details>
-  <summary>Creating `MachineSet` manually</summary>
-  
-  ### Clean YAML generator
-
-  ```bash
-  export type='machineset'
-  export original_name='arcci-jlzvv-worker'
-  export namespace='openshift-machine-api'
-
-  oc get $type $original_name  -n $namespace -o=json | jq 'del(.metadata.resourceVersion,.metadata.uid,.metadata.selfLink,.metadata.creationTimestamp,.metadata.annotations,.metadata.generation,.metadata.ownerReferences,.status,.spec.template.spec.lifecycleHooks,.spec.template.spec.metadata,.spec.template.spec.providerSpec.value.metadata)' | yq eval . --prettyPrint
-  ```
-
-  ### Apply big MachineSet
-  ```bash
-  # Variables
-  export infra_id=$(oc get -o jsonpath='{.status.infrastructureName}{"\n"}' infrastructure cluster)
-  export name='worker-big'
-  export replicas='3'
-  export disk='200'
-  export mem='20480'
-  export cpu='14'
-  export network='DataSvc PG OCP VM Network (VLAN 111)'
-  export datacenter='Redmond Datacenter'
-  export server='arclab-vc.arclab.local'
-  export datastore='ArcLab-NFS-01'
-  export resourcepool='ArcLab Workload Cluster'
-
-  # Add "--dry-run=client" for dry run
-  cat << EOF | oc apply -f -
-  apiVersion: machine.openshift.io/v1beta1
-  kind: MachineSet
-  metadata:
-    labels:
-      machine.openshift.io/cluster-api-cluster: ${infra_id}
-    name: ${infra_id}-${name}
-    namespace: openshift-machine-api
-  spec:
-    replicas: ${replicas}
-    selector:
-      matchLabels:
-        machine.openshift.io/cluster-api-cluster: ${infra_id}
-        machine.openshift.io/cluster-api-machineset: ${infra_id}-${name}
-    template:
-      metadata:
-        labels:
-          machine.openshift.io/cluster-api-cluster: ${infra_id}
-          machine.openshift.io/cluster-api-machine-role: worker
-          machine.openshift.io/cluster-api-machine-type: worker
-          machine.openshift.io/cluster-api-machineset: ${infra_id}-${name}
-      spec:
-        providerSpec:
-          value:
-            apiVersion: machine.openshift.io/v1beta1
-            credentialsSecret:
-              name: vsphere-cloud-credentials
-            diskGiB: ${disk}
-            kind: VSphereMachineProviderSpec
-            memoryMiB: ${mem}
-            network:
-              devices:
-                - networkName: ${network}
-            numCPUs: ${cpu}
-            numCoresPerSocket: 2
-            snapshot: ""
-            template: ${infra_id}-rhcos
-            userDataSecret:
-              name: worker-user-data
-            workspace:
-              datacenter: ${datacenter}
-              datastore: ${datastore}
-              folder: /${datacenter}/vm/${infra_id}
-              resourcePool: /${datacenter}/host/${resourcepool}/Resources
-              server: ${server}
-  EOF
-  # machineset.machine.openshift.io/arcci-jlzvv-worker-big created
-  ```
-
-</details>
+This is done via GitOps [here](https://github.com/mdrakiburrahman/openshift-app-of-apps/blob/main/machineset/kustomize/base/configure-machineset.yaml).
 
 We see the VMs getting created:
 ![Deploy](_images/17.png)
@@ -1013,24 +924,7 @@ And we see events per machine:
 
 ---
 
-## `RWX` via Azure Files
-
-> Ref:
-> * https://docs.openshift.com/container-platform/4.10/post_installation_configuration/storage-configuration.html#azure-file-definition_post-install-storage-configuration
-> * https://docs.openshift.com/container-platform/4.9/storage/persistent_storage/persistent-storage-azure-file.html
-> * https://docs.openshift.com/container-platform/3.11/install_config/persistent_storage/persistent_storage_azure_file.html
-> * https://docs.microsoft.com/en-us/azure/openshift/howto-create-a-storageclass
-> * https://blog.cloudtrooper.net/2021/05/25/mounting-azure-files-shares-from-openshift/
-> * https://kubernetes.io/docs/concepts/storage/storage-classes/#azure-file
-> * https://github.com/kubernetes-sigs/azurefile-csi-driver
-> * https://github.com/kubernetes-sigs/azurefile-csi-driver/blob/e38436385ceca271d8d9023d6ff155b4de4c924a/deploy/example/e2e_usage.md
-> * https://github.com/kubernetes-sigs/azurefile-csi-driver/blob/d5188bec18eca5e7f305fba8d630b8cb5bf14f81/docs/driver-parameters-intree.md
-> * https://github.com/ezYakaEagle442/aro-pub-storage/blob/master/setup-store-CSI-driver-azure-file.md
-> * https://githubmemory.com/repo/kubernetes-sigs/blob-csi-driver/issues/266
-> * https://faun.pub/dynamic-provisioning-using-azure-files-container-storage-interface-csi-drivers-784034cb3978
-> * https://github.com/ezYakaEagle442/aro-pub-storage/blob/master/setup-store-CSI-driver-azure-file.md
-> * https://access.redhat.com/documentation/en-us/openshift_container_platform/4.10/html/storage/using-container-storage-interface-csi#csi-tp-enable_persistent-storage-csi-azure-file
-> * https://access.redhat.com/documentation/en-us/openshift_container_platform/4.10/html/nodes/working-with-clusters#nodes-cluster-enabling
+## `RWX` via Azure
 
 Create `ClusterRole` for Secret Read/Write and add to `ServiceAccount` that binds PVCs:
 
@@ -1222,189 +1116,11 @@ terraform apply -auto-approve
 
 Good as new!
 
-![Result](_images/61.png)
-
-
-
-### Testing Dynamic provisioning
-
-#### Attempt 1 - Fail
-
-```bash
-# Secret for cloud.conf
-kubectl create secret generic azure-cloud-provider -n kube-system --from-file=cloud.conf=/workspaces/openshift-vsphere-install/fls-test/cloud.conf
-
-# Secret for Storage Account
-kubectl create secret generic azure-secret --from-literal azurestorageaccountname=... --from-literal azurestorageaccountkey="...w==" --type=Opaque
-
-# Create StorageClass
-cat << EOF  | oc apply -f -
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: azurefile-csi
-provisioner: file.csi.azure.com
-allowVolumeExpansion: true
-parameters:
-  provisioner-secret-name: azure-secret
-  provisioner-secret-namespace: default
-  node-stage-secret-name: azure-secret
-  node-stage-secret-namespace: default
-  controller-expand-secret-name: azure-secret
-  controller-expand-secret-namespace: default
-mountOptions:
-  - dir_mode=0777
-  - file_mode=0777
-  - uid=0
-  - gid=0
-  - mfsymlinks
-  - cache=strict  # https://linux.die.net/man/8/mount.cifs
-  - nosharesock  # reduce probability of reconnect race
-  - actimeo=30  # reduce latency for metadata-heavy workload
-EOF
-
-# Deploy an STS that uses it
-cat << EOF | oc apply -f -
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: statefulset-azurefile
-  labels:
-    app: nginx
-spec:
-  podManagementPolicy: Parallel  # default is OrderedReady
-  serviceName: statefulset-azurefile
-  replicas: 1
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      nodeSelector:
-        "kubernetes.io/os": linux
-      containers:
-        - name: statefulset-azurefile
-          image: mcr.microsoft.com/oss/nginx/nginx:1.19.5
-          command:
-            - "/bin/bash"
-            - "-c"
-            - set -euo pipefail; while true; do echo $(date) >> /mnt/azurefile/outfile; sleep 1; done
-          volumeMounts:
-            - name: persistent-storage
-              mountPath: /mnt/azurefile
-  updateStrategy:
-    type: RollingUpdate
-  selector:
-    matchLabels:
-      app: nginx
-  volumeClaimTemplates:
-  - metadata:
-      name: persistent-storage
-    spec:
-      accessModes: [ "ReadWriteOnce" ]
-      storageClassName: "azurefile-csi"
-      resources:
-        requests:
-          storage: 1Gi
-EOF
-```
-
-#### Attempt 2: Using CTP on OCP - Fail
-
-```bash
-# Patch to enable Preview features
-oc patch featuregate cluster -p='{ "spec": { "featureSet": "TechPreviewNoUpgrade" } }' --type=merge
-
-oc get featuregate cluster -o yaml
-# apiVersion: config.openshift.io/v1
-# kind: FeatureGate
-# ...
-# spec:
-#   featureSet: TechPreviewNoUpgrade <---
-
-# All nodes will go through new config rotations
-oc get nodes
-# NAME                           STATUS                     ROLES    AGE     VERSION
-# arcci-jlzvv-master-0           Ready                      master   16d     v1.23.5+3afdacb
-# arcci-jlzvv-master-2           Ready,SchedulingDisabled   master   16d     v1.23.5+3afdacb
-# arcci-jlzvv-master-3           Ready                      master   6d17h   v1.23.5+3afdacb
-
-# Validate after it comes back to ready
-oc debug node/arcci-jlzvv-master-2
-chroot /host
-cat /etc/kubernetes/kubelet.conf
-# "featureGates": {
-#   "APIPriorityAndFairness": true,
-#   "BuildCSIVolumes": true,
-#   "CSIDriverAzureDisk": true,
-#   "CSIDriverAzureFile": true,           <---
-#   "CSIDriverSharedResource": true,
-
-# Looking good!
-
-# Now, if we immediately check the Cluster Operator:
-oc get co storage
-# NAME      VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
-# storage   4.10.16   True        True          False      5m2s    VSphereCSIDriverOperatorCRProgressing: VMwareVSphereDriverControllerServiceControllerProgressing: Waiting for Deployment to deploy pods...
-```
-
-We want, according to [this](https://access.redhat.com/documentation/en-us/openshift_container_platform/4.10/html/storage/using-container-storage-interface-csi#csi-tp-enable_persistent-storage-csi-azure-file):
-* AVAILABLE should be "True".
-* PROGRESSING should be "False".
-* DEGRADED should be "False".
-
-Waiting a few more minutes till nodes are done rotating:
-
-```bash
-NAME      VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
-storage   4.10.16   True        False         False      42s
-```
-
-And let's validate our pods in the CSI namespace:
-```bash
-oc get pod -n openshift-cluster-csi-drivers
-
-# NAME                                                    READY   STATUS    RESTARTS        AGE
-# shared-resource-csi-driver-node-7dnbb                   2/2     Running   2               8m27s
-# shared-resource-csi-driver-node-96tn6                   2/2     Running   0               8m27s
-# shared-resource-csi-driver-node-nxf9d                   2/2     Running   2               8m27s
-# shared-resource-csi-driver-node-pkxrp                   2/2     Running   2               8m27s
-# shared-resource-csi-driver-node-vz982                   2/2     Running   0               8m27s
-# shared-resource-csi-driver-node-xb4qb                   2/2     Running   0               8m27s
-# shared-resource-csi-driver-operator-5cf4d4d975-xncmz    1/1     Running   0               108s
-...
-# vmware-vsphere-csi-driver-controller-79c95cfb55-gfh2p   9/9     Running   0               5m16s
-# vmware-vsphere-csi-driver-controller-79c95cfb55-lcxv5   9/9     Running   0               103s
-# vmware-vsphere-csi-driver-node-7d5bc                    3/3     Running   1 (16d ago)     16d
-# vmware-vsphere-csi-driver-node-8dz2t                    3/3     Running   1 (6d16h ago)   6d16h
-...
-# vmware-vsphere-csi-driver-node-p9rx7                    3/3     Running   5 (4m15s ago)   6d16h
-# vmware-vsphere-csi-driver-operator-7869c4cb55-pf5rr     1/1     Running   0               5m14s
-# vmware-vsphere-csi-driver-webhook-745d8fb886-lxms6      1/1     Running   0               108s
-
-# No Azure File CSI Pods^
-
-# No storage classes:
-oc get storageclass
-# NAME                 PROVISIONER                    RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
-# thin                 kubernetes.io/vsphere-volume   Delete          Immediate              false                  16d
-# thin-csi (default)   csi.vsphere.vmware.com         Delete          WaitForFirstConsumer   true                   16d
-```
-
-Ok _now_ let's install the `StorageClass` as per Andy's instructions.
-
-Nope, no luck.
-
-```bash
-oc delete pod -l=app=shared-resource-csi-driver-node -n openshift-cluster-csi-drivers --grace-period=0 --force
-oc delete --all pod -n openshift-cluster-storage-operator --grace-period=0 --force
-```
-
-> Nothing, in fact this also messed up our static provisioning capabilities above.
+![Result](_images/62.png)
 
 ---
 
-## ArgoCD
+## ArgoCD - base
 
 > * https://computingforgeeks.com/how-to-install-argocd-on-openshift-cluster/
 
@@ -1415,9 +1131,7 @@ kubectl create namespace argocd
 # Apply massive YAML in Argo Namespace
 kubectl apply -n argocd -f /workspaces/openshift-vsphere-install/ArgoCD/install/argo.yaml
 
-# Create:
-# - Route to access
-# - App of Apps
+# Creates route to access UI
 cat << EOF | oc apply -f -
 apiVersion: route.openshift.io/v1
 kind: Route
@@ -1436,31 +1150,8 @@ spec:
     name: argocd-server
     weight: 100
   wildcardPolicy: None
----
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: argocd-app-of-apps
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: 'https://github.com/mdrakiburrahman/openshift-app-of-apps.git'
-    path: app-of-apps/kustomize/overlays/arcci
-    targetRevision: HEAD
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: argocd
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - Validate=false
-      - CreateNamespace=false
 EOF
-# route.route.openshift.io/argocd-route unchanged
-# application.argoproj.io/argocd-app-of-apps created
+# route.route.openshift.io/argocd-route created
 ```
 
 ArgoCD is now accessible:
@@ -1476,195 +1167,32 @@ argocd login argocd.apps.arcci.fg.contoso.com --username admin --password $argop
 
 # List apps
 argocd app list
-# NAME                CLUSTER                         NAMESPACE              PROJECT  STATUS  HEALTH   SYNCPOLICY  CONDITIONS  REPO                                                          PATH                                  TARGET
-# argocd-app-of-apps  https://kubernetes.default.svc  argocd                 default  Synced  Healthy  Auto-Prune  <none>      https://github.com/mdrakiburrahman/openshift-app-of-apps.git  app-of-apps/kustomize/overlays/arcci  HEAD
-# machineset          https://kubernetes.default.svc  openshift-machine-api  default  Synced  Healthy  Auto-Prune  <none>      https://github.com/mdrakiburrahman/openshift-app-of-apps.git  machineset/kustomize/overlays/arcci   HEAD
-# ...
+# NAME  CLUSTER  NAMESPACE  PROJECT  STATUS  HEALTH  SYNCPOLICY  CONDITIONS  REPO  PATH  TARGET
+
+# Empty for now
 ```
 
-We see our App of apps:
-![Argo Route](_images/23.png)
+## ArgoCD - App of App
 
-With 3 node `MachineSet`:
-![Argo Route](_images/24.png)
+App-of-apps will create literally everything up untill MIAA in Git - so we need to perform all the necessary pre-reqs before we deploy it.
 
-And if we do a git commit [like this](https://github.com/mdrakiburrahman/openshift-app-of-apps/commit/50135742eadc51e992379fbb85a56f2967ef4b2a) - it scales up/down - cool!
-![Argo Route](_images/25.png)
+### Pre-reqs
 
----
+#### Sealed Secret
 
-## MetalLB
-
-> * https://docs.openshift.com/container-platform/4.10/networking/metallb/metallb-operator-install.html
-> * https://docs.openshift.com/container-platform/4.10/networking/metallb/metallb-configure-address-pools.html#metallb-configure-address-pools
-> * https://docs.openshift.com/container-platform/4.10/networking/metallb/metallb-configure-services.html#metallb-configure-services
-> * https://github.com/openshift/metallb-operator
-
-- [X] Need to add DHCP exception to DC for say, 30 IPs - `10.216.175.48-10.216.175.79` (added above)
-
-Added MetalLB [here](https://github.com/mdrakiburrahman/openshift-app-of-apps/tree/main/metallb/kustomize):
-
-![MetalLB](_images/28.png)
-
-Let's try to create a test `LoadBalancer` Service, delete it, then recreate to see if we get the same IP back:
+Inject BYOK for Sealed Secrets:
 
 ```bash
-# Create ns
-oc create ns lb-test
-
-# Deployment with Service
-cat <<EOF | oc apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx
-  namespace: lb-test
-  labels:
-    app.kubernetes.io/name: proxy
-spec:
-  containers:
-  - name: nginx
-    image: nginx:stable
-    ports:
-      - containerPort: 80
-        name: http-web-svc 
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: nginx-service
-  namespace: lb-test
-spec:
-  type: LoadBalancer
-  selector:
-    app.kubernetes.io/name: proxy
-  ports:
-  - name: name-of-service-port
-    protocol: TCP
-    port: 80
-    targetPort: http-web-svc
-EOF
-
-oc get svc -n lb-test
-
-# NAME            TYPE           CLUSTER-IP       EXTERNAL-IP     PORT(S)        AGE
-# nginx-service   LoadBalancer   172.30.108.211   10.216.175.48   80:30715/TCP   6s
+export NAMESPACE="sealed-secrets"
+kubectl create namespace "$NAMESPACE"
+kubectl apply -f /workspaces/openshift-vsphere-install/.devcontainer/.keys/sealed-secrets-secret.yaml
 ```
 
-So that's the first IP in our `AddressPool`:
-![MetalLB](_images/29.png)
+#### `kube-arc-data-services-installer-job` Secret
 
-> Validated that deleting the service releases the IPs once again.
----
+> Make sure the Encrypted Secret for the job is committed in git, e.g. [here](https://github.com/mdrakiburrahman/openshift-app-of-apps/blob/main/kube-arc-data-services-installer-job/kustomize/overlays/arcci/configs/azure-spn-secret.yaml)
 
-## Bitnami Sealed Secrets
-
-> * https://cloudyuga.guru/blog/sealedsecrets
-> * https://www.youtube.com/watch?v=o-TVKfoUO10&ab_channel=CloudYuga
-> * https://faun.pub/introduction-to-bitnami-sealed-secrets-bb5ae74d9a25
-> * https://gist.github.com/vfarcic/820aecf0799d679d9082eef00d07b515
-> * https://www.youtube.com/watch?v=xd2QoV6GJlc&t=6s&ab_channel=DevOpsToolkit
-> * https://devopstales.github.io/kubernetes/argocd-kubeseal/
-> * https://github.com/gnunn-gitops/cluster-config/blob/main/components/apps/sealed-secrets-operator/overlays/default/kustomization.yaml
-> * https://github.com/redhat-cop/gitops-catalog/tree/main/sealed-secrets-operator
-> * https://dev.to/ashokan/sealed-secrets-bring-your-own-keys-and-multi-cluster-scenario-1ee8
-> * https://github.com/bitnami-labs/sealed-secrets/blob/main/docs/bring-your-own-certificates.md
-> * https://argo-cd.readthedocs.io/en/stable/faq/#why-are-resources-of-type-sealedsecret-stuck-in-the-progressing-state
-> * https://github.com/argoproj/argo-cd/issues/5991
-
-Added [commit here](https://github.com/mdrakiburrahman/openshift-app-of-apps/blob/main/app-of-apps/kustomize/overlays/arcci/sealed-secrets-patch.yaml) for BYOK:
-![Sealed Secrets](_images/30.png)
-
-We can use our BYOK to pre-create all the secrets and stash them in Git safely!
-```bash
-# Fetch public key from K8s and compare to our generated BYOK
-kubeseal --controller-namespace sealed-secrets --fetch-cert | md5sum && md5sum /workspaces/openshift-vsphere-install/.devcontainer/.keys/seal.crt
-# 64fda0938dfe37f632a6b88a5f2252af  -
-# 64fda0938dfe37f632a6b88a5f2252af  /workspaces/openshift-vsphere-install/.devcontainer/.keys/seal.crt
-```
-
-Same hash^ - means we can pre-create.
-
-Quick demo:
-```bash
-export PUBKEY='/workspaces/openshift-vsphere-install/.devcontainer/.keys/seal.crt'
-
-# Create sealed secret in sample namespace
-kubectl create ns sample
-
-# Create secret
-kubectl -n sample \
-    create secret \
-    generic mysecret \
-    --dry-run=client \
-    --from-literal clientID=so-secret \
-    --output json \
-    | kubeseal --cert $PUBKEY --format=yaml \
-    | kubectl apply -f-
-# sealedsecret.bitnami.com/mysecret created
-
-# Decode secret from K8s
-kubectl get secret mysecret -n sample \
-    --output jsonpath="{.data.clientID}" \
-    | base64 --decode && echo
-
-# so-secret
-```
-
----
-
-## Arc Data Services onboarding with a `Job`
-
-> * https://github.com/kubernetes-sigs/kustomize/issues/2962
-> * https://faun.pub/sealing-secrets-with-kustomize-51d1b79105d8
-
-Working setup - [here](https://github.com/mdrakiburrahman/openshift-app-of-apps/blob/main/app-of-apps/kustomize/overlays/arcci/kube-arc-data-services-installer-job-patch.yaml):
-
-So Kubernetes is bad at generating `job` name it seems: [See Issue](https://github.com/kubernetes-sigs/kustomize/issues/641)
-
-Argo has a great solution using Hooks: [See](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_hooks/)
-
-Since our `job` is Idempotent, we can rerun as many times as we like!
-
-> The only trick will be pulling logs out, which we can solve using Container Insights or Prometheus I think. The good news is, if the `job` fails I think Argo still keeps it around so that's good - if we hit an error code we'll get our logs out.
-
-### Onboard
-
-Onboard:
-
-![Arc](_images/30.png)
-
-In Azure:
-
-![Arc](_images/31.png)
-
-### Offboard
-
-And we change our `ConfigMap` in a [git commit](https://github.com/mdrakiburrahman/openshift-app-of-apps/commit/259d09a3062d628bc93c4a3ff4ee805b8b19fdb3) - which auto forces a sync!
-![Arc](_images/32.png)
-
-And the `job` auto deletes:
-![Arc](_images/33.png)
-
-### Onboard
-
-And we change our `ConfigMap` in a [git commit](https://github.com/mdrakiburrahman/openshift-app-of-apps/commit/31a478e944936458dd914ce0b9dbd7d486718786):
-
-We can force a sync via `argocd app sync kube-arc-data-services-installer-job`:
-
-![Arc](_images/34.png)
-
-And after Arc is onboarded we see:
-
-![Arc](_images/35.png)
-
----
-
-## ADC (SMK) onboarding via GitOps
-
-> * https://docs.microsoft.com/en-us/azure/azure-arc/data/deploy-system-managed-keytab-active-directory-connector
-> * https://docs.microsoft.com/en-us/azure/azure-arc/data/active-directory-prerequisites
-> * https://docs.microsoft.com/en-us/windows/win32/adschema/active-directory-schema-site
+#### Arc `ADC` connector
 
 Perform the following on the Domain Controller `ocplab-dc1`:
 
@@ -1821,21 +1349,47 @@ Get-ADOrganizationalUnit -Identity $Ou |
     Remove-ADOrganizationalUnit -Confirm:$false
 ```
 
-And post commit of ADC manifest, we see DNS Proxy and Security Support is up:
+### Onboard to App of App
 
-![ADC Up](_images/38.png)
+```bash
+cat << EOF | oc apply -f -
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-app-of-apps
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/mdrakiburrahman/openshift-app-of-apps.git'
+    path: app-of-apps/kustomize/overlays/arcci
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - Validate=false
+      - CreateNamespace=false
+EOF
+```
+
+We see our App of apps get rolled out with each stage of the healthcheck till the end:
+
+![App of Apps](_images/63.png)
+
+> `TODO:` For the Arc `Job` onboarder, need to figure out why healthchecks need a Deployment Pod to function, rather than using the `Job`'s health
 
 ---
 
-## MIAA - GP with AD with GitOps
+# Post-deployment manual steps
 
-> We will use a ArgoCD healthcheck as defined here: https://argo-cd.readthedocs.io/en/stable/operator-manual/health/#way-1-define-a-custom-health-check-in-argocd-cm-configmap
+> Candidates for further automation, e.g. [`external-dns`](https://github.com/kubernetes-sigs/external-dns/issues/2416#issuecomment-1152921323)
 
-> BC will need `RWX` - postpone
-
-We commit the SQL MI, and the Argocd LUA health checks trace the CRD deployment to completion:
-
-![MIAA Up](_images/39.png)
+## MIAA - DNS entry
 
 Grab IP address allocated to MIAA `LoadBalancer` externally:
 ```bash
@@ -2102,24 +1656,12 @@ And we see the Pods coming up, and the Controller doing the deploy:
   - [X] Job onboarder test
   - [X] MIAA manifests as another App in the last wave
 - [X] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` MIAA to OCP
-- [ ] Rerun through steps, ensure everything is reproducible, specially the OpenShift deploy and ArgoCD waves
-- [ ] Terraform for all Infra component (vSphere, Azure) - running from Build Agent
-    - [ ] Include Linux Build Agent for AzDO
-    - [ ] Azure Files, K8s Secret inject for CSI
-    - [ ] With Terraform vSphere provider for Windows DC (template it, forget the DEV machine)
-    - Terratest for validation
-      - SQL MI validation harness of some sort
-    - Build a Modules repo that this main one pulls from as needed - have examples and testing
-      * Make the DC single node, modularize into a good image
-    - Remote State
-    - Stages to skip
-    - Leave Terraform until up to ArgoCD
-      * Convert anything you must need from YAML to HCL
-    - Deploy 2 OCPs against a single forest, modularize name and DNS creation
-      - Lock down `MachineSets` in ArgoCD to scale based on code commit - conserve IPs (also MetalLB conservation as well)!
-      - Create `MachineSets` with bigger sizes
+- [X] Rerun through steps, ensure everything is reproducible, specially the OpenShift deploy and ArgoCD waves
+- [ ] `Job` Ard onboarder
+  - [ ] OpenShift offboarding is not idempotent, route deletion causes Pod to fail
+  - [ ] Remove hacky workaround for onboarder `Job` that's present for Argo health check
+- [ ] See if it's worth factoring in the OpenShift deploy from devcontainer into Azure DevOps
 
-> There should be 2 players managing the Infra at all times - Terraform, and ArgoCD. Terraform hands over control to ArgoCD basically after the K8s and Arc stuff is done.
 
 ### Networking
 - [X] Deal with DHCP with extreme dilligence! Ensure the ingress routes for OpenShift cannot be assigned to VMs (Windows or RHOS). This means I should carve out a chunk for multiple OpenShift clusters
