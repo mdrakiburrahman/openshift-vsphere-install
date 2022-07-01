@@ -1,3 +1,6 @@
+# ---------------------------------------------------------------------------------------------------------------------
+# STORAGE CLASS USING AZURE FILE PROVISIONER
+# ---------------------------------------------------------------------------------------------------------------------
 resource "kubernetes_storage_class" "storage" {
   metadata {
     name = var.storageclass_name
@@ -10,9 +13,12 @@ resource "kubernetes_storage_class" "storage" {
   volume_binding_mode = "Immediate"
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+# SECRET WHERE STORAGE CLASS ACCESS KEY IS STORED - NEEDED FOR PV CREATION
+# ---------------------------------------------------------------------------------------------------------------------
 resource "kubernetes_secret" "secret" {
   metadata {
-    namespace = "openshift-cluster-csi-drivers"
+    namespace = "openshift-cluster-csi-drivers" # This is constant so we hardcode
     name = "${var.storageclass_name}-${var.storageaccount_name}-csi-driver-secret"
   }
 

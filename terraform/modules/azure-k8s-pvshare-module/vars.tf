@@ -2,34 +2,37 @@
 # REQUIRED PARAMETERS
 # You must provide a value for each of these parameters.
 # ---------------------------------------------------------------------------------------------------------------------
-
-variable "prefix" {
-  description = "The prefix which should be used for all resources in this module"
+variable "pvshare_name" {
+  description = "Name of the File Share/PV to create"
   type        = string
 }
 
-variable "resource_group_location" {
-  description = "The location in which the deployment is taking place"
+variable "pvshare_size" {
+  description = "Size of the File Share/PV to create"
+  type        = number
+}
+
+variable "storage_accnt_name" {
+  description = "Name of Storage Account to contain the File Share"
   type        = string
 }
 
-variable "resource_group_name" {
-  description = "Deployment RG name"
+variable "storageclass_name" {
+  description = "Name of the K8s storageClass to create"
   type        = string
 }
 
-variable "tags" {
-  type        = map(string)
-  description = "A map of the tags to use on the resources that are deployed with this module."
+variable "storageclass_secret_namespace" {
+  description = "Namespace where the Storage Account Key is stored"
+  type        = string
+}
+
+variable "storageclass_secret_name" {
+  description = "Name of the secret where the Storage Account Key is stored"
+  type        = string
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
 # OPTIONAL PARAMETERS
 # These parameters have reasonable defaults.
 # ---------------------------------------------------------------------------------------------------------------------
-
-variable "replication" {
-  description = "Type of replication to use for the storage account"
-  type        = string
-  default     = "LRS"
-}

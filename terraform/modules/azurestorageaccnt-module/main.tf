@@ -14,14 +14,8 @@ resource "azurerm_storage_account" "storage" {
   account_replication_type = var.replication
   account_kind             = "StorageV2"
   network_rules {
-    default_action             = "Allow"
+    default_action = "Allow"
   }
 
   tags = var.tags
-}
-
-resource "azurerm_storage_share" "example" {
-  name                 = var.file_share_name
-  storage_account_name = azurerm_storage_account.storage.name
-  quota                = var.file_share_size
 }
