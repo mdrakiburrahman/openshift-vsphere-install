@@ -1,6 +1,10 @@
 # Openshift vSphere Install
 Environment spinup steps for OCP on VSphere lab.
 
+### References:
+* The original, more verbose steps for this is available in [this branch](https://github.com/mdrakiburrahman/openshift-vsphere-install/tree/verbose-steps)
+* The App of Apps gitops repo for Cluster Onboarding with Arc is in [this repo](https://github.com/mdrakiburrahman/openshift-app-of-apps)
+
 # Domain Controller/DNS/DHCP installation
 
 <details>
