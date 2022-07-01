@@ -1661,7 +1661,7 @@ And we see the Pods coming up, and the Controller doing the deploy:
   - [X] MIAA manifests as another App in the last wave
 - [X] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` MIAA to OCP
 - [X] Rerun through steps, ensure everything is reproducible, specially the OpenShift deploy and ArgoCD waves
-- [ ] `Job` Ard onboarder
+- [ ] `Job` Arc onboarder
   - [ ] OpenShift offboarding is not idempotent, route deletion causes Pod to fail
   - [ ] Remove hacky workaround for onboarder `Job` that's present for Argo health check
 - [ ] See if it's worth factoring in the OpenShift deploy from devcontainer into Azure DevOps
