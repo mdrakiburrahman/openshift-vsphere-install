@@ -1163,8 +1163,14 @@ ArgoCD is now accessible:
 
 Login to `argocd` CLI:
 ```bash
-# Get secret
-export argopass=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo )
+# Change Argo password secret to "password" and change time of patch to now
+kubectl -n argocd patch secret argocd-secret \
+  -p '{"stringData": {
+    "admin.password": "$2a$10$rRyBsGSHK6.uc8fntPwVIuLVHgsAhAX7TcdrqW/RADU0uh7CaChLa",
+    "admin.passwordMtime": "'$(date +%FT%T%Z)'"
+  }}'
+
+export argopass='password'
 
 # Access via CLI
 argocd login argocd.apps.arcci.fg.contoso.com --username admin --password $argopass --insecure
