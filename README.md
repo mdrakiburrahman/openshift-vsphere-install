@@ -1170,10 +1170,8 @@ kubectl -n argocd patch secret argocd-secret \
     "admin.passwordMtime": "'$(date +%FT%T%Z)'"
   }}'
 
-export argopass='password'
-
 # Access via CLI
-argocd login argocd.apps.arcci.fg.contoso.com --username admin --password $argopass --insecure
+argocd login argocd.apps.arcci.fg.contoso.com --username admin --password 'password' --insecure
 
 # List apps
 argocd app list
@@ -1667,9 +1665,9 @@ And we see the Pods coming up, and the Controller doing the deploy:
   - [X] MIAA manifests as another App in the last wave
 - [X] Integrate a basic deploy with Azure DevOps Build Agent that can `kubectl apply` MIAA to OCP
 - [X] Rerun through steps, ensure everything is reproducible, specially the OpenShift deploy and ArgoCD waves
-- [ ] `Job` Arc onboarder
-  - [ ] OpenShift offboarding is not idempotent, route deletion causes Pod to fail
-  - [ ] Remove hacky workaround for onboarder `Job` that's present for Argo health check
+- [X] `Job` Arc onboarder
+  - [X] OpenShift offboarding is not idempotent, route deletion causes Pod to fail
+  - [X] Remove hacky workaround for onboarder `Job` that's present for Argo health check
 - [ ] See if it's worth factoring in the OpenShift deploy from devcontainer into Azure DevOps
 
 
