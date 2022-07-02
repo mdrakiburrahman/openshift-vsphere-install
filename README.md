@@ -1186,9 +1186,19 @@ App-of-apps will create literally everything up untill MIAA in Git - so we need 
 
 ### Pre-reqs
 
+#### ArgoCD `configMap`
+
+Repeated delete testing causes the `argocd-cm` to get deleted since we use it in our healthchecks. First, check `oc get configmap argocd-cm -n argocd`.
+
+If it's not there, run:
+
+```bash
+kubectl apply -n argocd -f /workspaces/openshift-vsphere-install/ArgoCD/install/argo.yaml
+```
+
 #### Sealed Secret
 
-Inject BYOK for Sealed Secrets:
+Inject BYOK for Sealed Secrets - this will get wiped after App of App delete:
 
 ```bash
 export NAMESPACE="sealed-secrets"
@@ -1196,13 +1206,19 @@ kubectl create namespace "$NAMESPACE"
 kubectl apply -f /workspaces/openshift-vsphere-install/.devcontainer/.keys/sealed-secrets-secret.yaml
 ```
 
-#### `kube-arc-data-services-installer-job` Secret
+#### `kube-arc-data-services-installer-job`
 
-> Make sure the Encrypted Secret for the job is committed in git, e.g. [here](https://github.com/mdrakiburrahman/openshift-app-of-apps/blob/main/kube-arc-data-services-installer-job/kustomize/overlays/arcci/configs/azure-spn-secret.yaml)
+##### Secret
+
+Make sure the Encrypted Secret for the job is committed in git, e.g. [here](https://github.com/mdrakiburrahman/openshift-app-of-apps/blob/main/kube-arc-data-services-installer-job/kustomize/overlays/arcci/configs/azure-spn-secret.yaml)
+
+##### Onboard intention
+
+Make sure `DELETE_FLAG=false` in the ConfigMap, e.g. [here](https://github.com/mdrakiburrahman/openshift-app-of-apps/blob/74d372db114e02c2d57264b79281f731d3e17e84/kube-arc-data-services-installer-job/kustomize/overlays/arcci/configs/configMap.env#L1)
 
 #### Arc `ADC` connector
 
-Perform the following on the Domain Controller `ocplab-dc1`:
+One-time activity for Windows Service Account generation - perform the following on the Domain Controller `ocplab-dc1`:
 
 ```powershell
 Import-Module ActiveDirectory
@@ -1389,8 +1405,6 @@ We see our App of apps get rolled out with each stage of the healthcheck till th
 
 ![App of Apps](_images/63.png)
 
-> `TODO:` For the Arc `Job` onboarder, need to figure out why healthchecks need a Deployment Pod to function, rather than using the `Job`'s health
-
 ---
 
 # Post-deployment manual steps
@@ -1401,20 +1415,30 @@ We see our App of apps get rolled out with each stage of the healthcheck till th
 
 Grab IP address allocated to MIAA `LoadBalancer` externally:
 ```bash
-miaa_name='sql-gp-ad-1'
+# GP and BC Primary
+miaa_name='sql-gp-ad-1' #'sql-bc-ad-1'
 miaa_svcs=$(oc get svc -l=app.kubernetes.io/instance=${miaa_name} -n azure-arc-data -o=json)
-miaa_external_svc=$(echo $services | jq -r '.items[] | select(.spec.type == "LoadBalancer")')
+miaa_external_svc=$(echo $miaa_svcs | jq -r '.items[] | select(.spec.type == "LoadBalancer")')
 miaa_external_svc_ip=$(echo $miaa_external_svc | jq -r '.status.loadBalancer.ingress[0].ip')
 echo $miaa_external_svc_ip
-# 10.216.175.48
+# 10.216.175.48 <- GP
+# 10.216.175.49 10.216.175.50 <- BC
+
+# BC Secondary
+miaa_name='sql-bc-ad-1'
+kubectl get sqlmi ${miaa_name} -n azure-arc-data -o json | jq -r .status.endpoints.secondary
+# 10.216.175.50,1433 <- BC Secondary
 ```
 
 Add in DNS entry for the K8s service:
 ```powershell
 Add-DnsServerResourceRecordA -Name sql-gp-ad-1 -ZoneName fg.contoso.com -IPv4Address 10.216.175.48
+Add-DnsServerResourceRecordA -Name sql-bc-ad-1 -ZoneName fg.contoso.com -IPv4Address 10.216.175.49
 ```
 
-Login via SQL Admin creds to `10.216.175.48,31433` or `sql-gp-ad-1.fg.contoso.com,31433`, add in AD Groups as SQL Admin to MIAA:
+Login via SQL Admin creds to `sql-gp-ad-1.fg.contoso.com,31433` and `sql-gp-bc-1.fg.contoso.com,31433`, 
+
+Add in AD Groups as SQL Admin to MIAA:
 ```sql
 USE [master]
 GO
@@ -1423,6 +1447,8 @@ GO
 ALTER SERVER ROLE [sysadmin] ADD MEMBER [FG\arcci-admins]
 GO
 ```
+
+> At this time it looks like the Secondary Endpoint doesn't support AD Auth in ADC SMK mode (probably because the SPN's weren't registered)
 
 ![MIAA Create Creds](_images/40.png)
 
@@ -1669,7 +1695,6 @@ And we see the Pods coming up, and the Controller doing the deploy:
   - [X] OpenShift offboarding is not idempotent, route deletion causes Pod to fail
   - [X] Remove hacky workaround for onboarder `Job` that's present for Argo health check
 - [ ] See if it's worth factoring in the OpenShift deploy from devcontainer into Azure DevOps
-
 
 ### Networking
 - [X] Deal with DHCP with extreme dilligence! Ensure the ingress routes for OpenShift cannot be assigned to VMs (Windows or RHOS). This means I should carve out a chunk for multiple OpenShift clusters
