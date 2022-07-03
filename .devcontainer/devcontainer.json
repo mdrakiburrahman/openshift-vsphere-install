@@ -12,6 +12,7 @@
 		"--cap-add=SYS_PTRACE",
 		"--security-opt",
 		"seccomp=unconfined",
+		"--privileged",
 		"--env-file=.devcontainer/devcontainer.env"
 	],
 	

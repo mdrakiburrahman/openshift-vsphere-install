@@ -192,9 +192,10 @@ Get-DnsServerForwarder
 # Check curl to Google
 curl google.com
 
-# Forward queries for arclab.local to ArcLab-DC
+# Forward queries for arclab.local to ArcLab-DC <-  This must be run on both DC1 and DC2
 Add-DnsServerConditionalForwarderZone -Name "arclab.local" -MasterServers "10.216.173.10" # ArcLab-DC.arclab.local
 ```
+
 ![Result](_images/4.png)
 
 ## `ocplab-dc2`
@@ -406,7 +407,7 @@ update-ca-certificates --verbose --fresh
 
 ## Deploy OCP on vSphere in IPI mode
 ```bash
-export installationDir='/workspaces/openshift-vsphere-install/openshift-install/secrets/installation-assets'
+export installationDir='/workspaces/openshift-vsphere-install/openshift-install/secrets/arcci'
 rm -rf $installationDir
 mkdir -p $installationDir
 cd $installationDir
@@ -452,7 +453,7 @@ openshift-install create cluster --log-level=debug
 # DEBUG Route found in openshift-console namespace: console 
 # DEBUG OpenShift console route is admitted          
 # INFO Install complete!                            
-# INFO To access the cluster as the system:admin user when using 'oc', run 'export KUBECONFIG=/workspaces/openshift-vsphere-install/openshift-install/secrets/installation-assets/auth/kubeconfig' 
+# INFO To access the cluster as the system:admin user when using 'oc', run 'export KUBECONFIG=/workspaces/openshift-vsphere-install/openshift-install/secrets/arcci/auth/kubeconfig' 
 # INFO Access the OpenShift web-console here: https://console-openshift-console.apps.arcci.fg.contoso.com 
 # INFO Login to the console with user: "kubeadmin", and password: "..." 
 # DEBUG Time elapsed per stage:                      
@@ -467,7 +468,7 @@ openshift-install create cluster --log-level=debug
 # 
 
 # Test access
-export KUBECONFIG=/workspaces/openshift-vsphere-install/openshift-install/secrets/installation-assets/auth/kubeconfig
+export KUBECONFIG=/workspaces/openshift-vsphere-install/openshift-install/secrets/arcci/auth/kubeconfig
 
 oc get nodes
 # NAME                       STATUS   ROLES    AGE   VERSION

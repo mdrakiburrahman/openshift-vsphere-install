@@ -16,8 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG TF_Version="1.1.5"
 ARG GO_VERSION="1.16.7"
 ARG HELM_VERSION=3.6.3
-ARG OC_VERSION="4.10.17" 
-ARG KUBECTX_VERSION "0.9.4"
+ARG OC_VERSION="4.10.17"
 
 # Configure apt and install packages
 RUN apt-get update \
@@ -40,17 +39,6 @@ RUN mkdir -p /tmp/downloads/helm \
     && curl -sL -o /tmp/downloads/helm.tar.gz https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz \
     && tar -C /tmp/downloads/helm -zxvf /tmp/downloads/helm.tar.gz \
     && mv /tmp/downloads/helm/linux-amd64/helm /usr/local/bin
-
-# Install kubectx
-RUN echo "Installing kubectx" \
-    && curl -L -o /usr/local/bin/kubectx https://raw.githubusercontent.com/ahmetb/kubectx/v${KUBECTX_VERSION}/kubectx \
-	&& curl -L -o /usr/local/bin/kubens https://raw.githubusercontent.com/ahmetb/kubectx/v${KUBECTX_VERSION}/kubens \
-    && chmod +x /usr/local/bin/kubectx \
-    && chmod +x /usr/local/bin/kubens
-
-# Install rbac-tool
-RUN curl https://raw.githubusercontent.com/alcideio/rbac-tool/master/download.sh | bash \
-    && mv ./bin/rbac-tool /usr/local/bin/rbac-tool
 
 # Install Golang
 # https://www.digitalocean.com/community/tutorials/how-to-install-go-on-ubuntu-20-04
