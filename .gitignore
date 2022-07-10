@@ -41,3 +41,4 @@ kubeconfig
 # Scratchpad
 arc-rbac-manual/*
 fls-test/*
+test-preview/*
