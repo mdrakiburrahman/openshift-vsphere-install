@@ -105,7 +105,7 @@ Install-ADDSForest `
     -Force:$true `
     -SafeModeAdministratorPassword $secureDomainAdminPassword
 
-# Reboots - takes 2-3 mins at "Please wait for the Group Policy Client" - it's normal for GPO Policiy initialization
+# Reboots - takes 2-3 mins at "Please wait for the Group Policy Client" - it's normal for GPO Policy initialization
 ```
 
 Now we can sign-in as Domain Admin `fg\Administrator` to RDP.
@@ -1695,7 +1695,7 @@ And we see the Pods coming up, and the Controller doing the deploy:
 - [X] `Job` Arc onboarder
   - [X] OpenShift offboarding is not idempotent, route deletion causes Pod to fail
   - [X] Remove hacky workaround for onboarder `Job` that's present for Argo health check
-- [ ] See if it's worth factoring in the OpenShift deploy from devcontainer into Azure DevOps
+- [ ] Wrap OpenShift deploy up until ArgoCD onboarding into a script
 
 ### Networking
 - [X] Deal with DHCP with extreme dilligence! Ensure the ingress routes for OpenShift cannot be assigned to VMs (Windows or RHOS). This means I should carve out a chunk for multiple OpenShift clusters
