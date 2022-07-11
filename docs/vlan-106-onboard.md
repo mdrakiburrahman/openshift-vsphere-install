@@ -21,8 +21,8 @@ We add the VLAN manually to DC1, and see it get assigned an IP from the pool:
 ```powershell
 
 # Start with an IP that we manually test is empty, leaving room for more devboxes - i.e. ping $IP, or the pre-assigned one from vSphere
-$IP = "10.216.154.150"
-$MaskBits = 25 # This means subnet mask = 255.255.255.128 - http://jodies.de/ipcalc?host=255.255.255.0&mask1=24&mask2=
+$IP = "10.216.154.193"
+$MaskBits = 26 # This means subnet mask = 255.255.255.192 - http://jodies.de/ipcalc?host=255.255.255.0&mask1=24&mask2=
 $gateway = (Get-NetIPConfiguration | Foreach IPv4DefaultGateway | Select NextHop)."NextHop"[0]
 # 10.216.154.129 <- VLAN 106
 # 10.216.175.1   <- VLAN 111
@@ -51,7 +51,7 @@ $adapter | New-NetIPAddress `
 # Configure the DNS client server IP addresses
 $adapter | Set-DnsClientServerAddress -ServerAddresses $DNS
 
-# Reconnect RDP from Laptop with MSFTVPN - should work at 10.216.154.150
+# Reconnect RDP from Laptop with MSFTVPN - should work at 10.216.154.193
 ```
 
 For example - we see:
@@ -61,8 +61,8 @@ For example - we see:
 ### Add DHCP Scope
 
 ```powershell
-$dnsServerIP = (Get-NetIPAddress | Where-Object {$_.AddressState -eq "Preferred" -and $_.PrefixLength -eq 25}).IPAddress
-# The 25 filter above is because of our mask we set previously
+$dnsServerIP = (Get-NetIPAddress | Where-Object {$_.AddressState -eq "Preferred" -and $_.PrefixLength -eq 26}).IPAddress
+# The 26 filter above is because of our mask we set previously
 
 $domainName = 'fg.contoso.com'
 $gateway = (Get-NetIPConfiguration | Foreach IPv4DefaultGateway | Select NextHop)."NextHop"[0]
@@ -75,9 +75,9 @@ $hostname = hostname
 $HashArgs = @{
     'Name' = 'VLAN-106';                    # Redmond VLAN 106 mapping
     'Description' = 'Kubernetes CI Lab 2';  # This is the human-readable description of the scope
-    'StartRange' = '10.216.154.151';        # We start later because other devboxes etc are present in this VLAN
+    'StartRange' = '10.216.154.194';        # We start later because other devboxes etc are present in this VLAN
     'EndRange' = '10.216.154.254';          # Specifies the end IP address in the scope
-    'SubnetMask' = '255.255.255.128';       # Specifies the subnet mask of the scope
+    'SubnetMask' = '255.255.255.192';       # Specifies the subnet mask of the scope
     'State' = 'Active';                     # Activates the scope
     'LeaseDuration' = '0.00:30:00';         # Specifies the length of the lease duration - 30 mins
 }
@@ -101,30 +101,27 @@ Get-DhcpServerV4Reservation -ScopeID $scopeID
 
 # Add Exclusion ranges
 
-## Devboxes etc [129 - 149]
-Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.154.129 -EndRange 10.216.154.149
+## DC [194] + OpenShift Routes for 4 clusters = 8 IPs [195-203]
+Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.154.194 -EndRange 10.216.154.203
 
-## DC [150 - 151] + OpenShift Routes for 6 clusters = 12 IPs [163]
-Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.154.150 -EndRange 10.216.154.163
+## MetalLB - 3 per cluster = 12 IPs [204 - 216]
+Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.154.204 -EndRange 10.216.154.216
 
-## MetalLB - 5 per cluster = 30 IPs [164 - 194]
-Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange 10.216.154.164 -EndRange 10.216.154.194
-
-# So that leaves 254 - 194 = 60 IPs for actual workers - each of our 6 clusters can look like this:
+# So that leaves 254 - 216 = 38 IPs for actual workers - each of our 4 clusters can look like this:
 #
 #   Masters = 3
-#   Default workers = 3
-#   Big workers = 4
+#   Default workers = 1
+#   Big workers = 5
 #
-#   10 IPs per cluster = 60 IPs, roughly
+#   9 IPs per cluster = 36 IPs, roughly
 
 # Get 5 next IP Addresses that are free
 Get-DhcpServerv4FreeIPAddress -ScopeID $scopeID -NumAddress 5
-# 10.216.154.195
-# 10.216.154.196
-# 10.216.154.197
-# 10.216.154.198
-# 10.216.154.199
+# 10.216.154.217
+# 10.216.154.218
+# 10.216.154.219
+# 10.216.154.220
+# 10.216.154.221
 ```
 
 ![Result](../_images/72.png)
@@ -133,14 +130,14 @@ Get-DhcpServerv4FreeIPAddress -ScopeID $scopeID -NumAddress 5
 
 ```powershell
 # Add a reverse lookup zone - VLAN 106
-Add-DnsServerPrimaryZone -NetworkId "10.216.154.128/25" -ReplicationScope Domain
+Add-DnsServerPrimaryZone -NetworkId "10.216.154.192/26" -ReplicationScope Domain
 
 # Get reverse zone name via the UI
-$Reverse = '128.154.216.10.in-addr.arpa'
+$Reverse = '192.154.216.10.in-addr.arpa'
 
-# Add a PTR record to the Reverse Lookup Zone for the Domain Controller. This is needed for when the SQL MI Pod looks up the DC in reverse.
-Add-DNSServerResourceRecordPTR -ZoneName $Reverse -Name 50 -PTRDomainName ocplab-dc1.fg.contoso.com # 50 is because of the IP address of DC1
-Add-DNSServerResourceRecordPTR -ZoneName $Reverse -Name 51 -PTRDomainName ocplab-dc2.fg.contoso.com 
+# Add a PTR record to the Reverse Lookup Zone for the Domain Controllers. This is needed for when the SQL MI Pod looks up the DC in reverse.
+Add-DNSServerResourceRecordPTR -ZoneName $Reverse -Name 193 -PTRDomainName ocplab-dc1.fg.contoso.com
+Add-DNSServerResourceRecordPTR -ZoneName $Reverse -Name 194 -PTRDomainName ocplab-dc2.fg.contoso.com 
 ```
 
 ![Result](../_images/75.png)
@@ -158,10 +155,8 @@ Add-DNSServerResourceRecordPTR -ZoneName $Reverse -Name 51 -PTRDomainName ocplab
 ### Set Static IP Address
 
 ```powershell
-$IP = "10.216.154.151"
-$MaskBits = 25 # This means subnet mask = 255.255.255.128 - http://jodies.de/ipcalc?host=255.255.255.0&mask1=24&mask2=
-$gateway = (Get-NetIPConfiguration | Foreach IPv4DefaultGateway | Select NextHop)."NextHop"[0]
-# 10.216.154.129
+$IP = "10.216.154.194"
+$MaskBits = 26 # This means subnet mask = 255.255.255.192 - http://jodies.de/ipcalc?host=255.255.255.0&mask1=24&mask2=
 $IPType = "IPv4"
 
 # Retrieve the network adapter that you want to configure
@@ -180,12 +175,12 @@ $adapter | New-NetIPAddress `
  -AddressFamily $IPType `
  -IPAddress $IP `
  -PrefixLength $MaskBits `
- -DefaultGateway $gateway
+ -DefaultGateway '10.216.154.129'
 
 # Configure the DNS client server IP addresses
-$adapter | Set-DnsClientServerAddress -ServerAddresses ("10.216.154.150","127.0.0.1")
+$adapter | Set-DnsClientServerAddress -ServerAddresses ("10.216.154.193","127.0.0.1")
 
-# Reconnect RDP from Laptop with MSFTVPN - should work at 10.216.154.151
+# Reconnect RDP from Laptop with MSFTVPN - should work at 10.216.154.194
 ```
 
 ![Result](../_images/74.png)

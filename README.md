@@ -1700,10 +1700,11 @@ And we see the Pods coming up, and the Controller doing the deploy:
 ### Networking
 - [X] Deal with DHCP with extreme dilligence! Ensure the ingress routes for OpenShift cannot be assigned to VMs (Windows or RHOS). This means I should carve out a chunk for multiple OpenShift clusters
 - [X] Plan out your IP address ranges - figure out MetalLB if it sucks up IPs - if so, plan out CIDRs
-- [] Can I use another VLAN outside of `VLAN-111`? If so, what steps to perform in the DC?
+- [X] Can I use another VLAN outside of `VLAN-111`? If so, what steps to perform in the DC?
 
-### Extras
+### Day 2
 - [ ] Monitoring integration - Container Insights/Kusto
+- [ ] OpenShift upgrade strategy
 - [ ] Some Teams Alerting Webhook (e.g. out of space on `logsdb`)?
 - [X] ~~Vault~~ (Bitnami instead)
 - [ ] Aqua?
