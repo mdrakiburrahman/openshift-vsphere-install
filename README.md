@@ -1700,7 +1700,9 @@ And we see the Pods coming up, and the Controller doing the deploy:
 ### Networking
 - [X] Deal with DHCP with extreme dilligence! Ensure the ingress routes for OpenShift cannot be assigned to VMs (Windows or RHOS). This means I should carve out a chunk for multiple OpenShift clusters
 - [X] Plan out your IP address ranges - figure out MetalLB if it sucks up IPs - if so, plan out CIDRs
-- [] Can I use another VLAN outside of `VLAN-111`? If so, what steps to perform in the DC?
+- [X] Can I use another VLAN outside of `VLAN-111`?
+    > Not via IPI: [Link](https://cloud.redhat.com/blog/how-to-install-openshift-on-vmware-with-terraform-and-static-ip-addresses)
+- [ ] Find the bare minimum # of small workers to get ArgoCD up
 
 ### Extras
 - [ ] Monitoring integration - Container Insights/Kusto
