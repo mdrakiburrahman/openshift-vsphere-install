@@ -1702,7 +1702,7 @@ And we see the Pods coming up, and the Controller doing the deploy:
 - [X] Plan out your IP address ranges - figure out MetalLB if it sucks up IPs - if so, plan out CIDRs
 - [X] Can I use another VLAN outside of `VLAN-111`?
     > Not via IPI: [Link](https://cloud.redhat.com/blog/how-to-install-openshift-on-vmware-with-terraform-and-static-ip-addresses)
-- [ ] Find the bare minimum # of small workers to get ArgoCD up
+- [ ] Redeploy `arcdev` to find the bare minimum # of small workers to get ArgoCD up
 
 ### Extras
 - [ ] Monitoring integration - Container Insights/Kusto
