@@ -19,14 +19,8 @@ echo "Cleaning up FLS resources on Storage Account: ${storageAccountName}..."
 # Cleanup FLS resources
 # =======================
 
-# Get all pvs that have status "Released" into an array
-declare -a released_pv_array
-released_pv_array=($(kubectl get pv | tail -n +2 | grep Released | awk '{print $1}'))
-
-# Delete from ARM and K8s
-for i in ${!released_pv_array[@]}; do
-  pv=${released_pv_array[$i]}
-
+# Get all pvs that have status "Released" into an array - delete from ARM and K8s
+kubectl get pv -o json | jq -r '.items[] | select(.spec.storageClassName == "'${storageClassName}'") | select(.status.phase == "Released") | .metadata.name' | while read pv; do
   echo "Cleaning up PV ${pv} in Kubernetes..."
   kubectl delete pv $pv
 
